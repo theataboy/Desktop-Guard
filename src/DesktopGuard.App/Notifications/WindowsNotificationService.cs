@@ -37,7 +37,12 @@ internal sealed class WindowsNotificationService : IDisposable
             or UnauthorizedAccessException
             or System.Runtime.InteropServices.COMException
             or System.ComponentModel.Win32Exception
-            or TypeInitializationException)
+            or TypeInitializationException
+            or TypeLoadException
+            or FileNotFoundException
+            or FileLoadException
+            or BadImageFormatException
+            or MissingMethodException)
         {
             if (manager is not null)
             {
@@ -56,18 +61,18 @@ internal sealed class WindowsNotificationService : IDisposable
             return;
         }
 
-        string safeName = SanitizeName(name);
-        AppNotificationBuilder builder = new AppNotificationBuilder()
-            .AddText(isPublic ? AppStrings.PublicShortcutNotificationTitle : AppStrings.ShortcutNotificationTitle)
-            .AddText(string.Format(AppStrings.ShortcutNotificationBodyFormat, safeName));
-
-        if (shortcut is not null && shortcut.Id != Guid.Empty)
-        {
-            builder.AddArgument("shortcutId", shortcut.Id.ToString("N"));
-        }
-
         try
         {
+            string safeName = SanitizeName(name);
+            AppNotificationBuilder builder = new AppNotificationBuilder()
+                .AddText(isPublic ? AppStrings.PublicShortcutNotificationTitle : AppStrings.ShortcutNotificationTitle)
+                .AddText(string.Format(AppStrings.ShortcutNotificationBodyFormat, safeName));
+
+            if (shortcut is not null && shortcut.Id != Guid.Empty)
+            {
+                builder.AddArgument("shortcutId", shortcut.Id.ToString("N"));
+            }
+
             _manager?.Show(builder.BuildNotification());
         }
         catch (Exception exception) when (exception is InvalidOperationException
@@ -75,7 +80,12 @@ internal sealed class WindowsNotificationService : IDisposable
             or System.Runtime.InteropServices.COMException
             or System.ComponentModel.Win32Exception
             or ArgumentException
-            or TypeInitializationException)
+            or TypeInitializationException
+            or TypeLoadException
+            or FileNotFoundException
+            or FileLoadException
+            or BadImageFormatException
+            or MissingMethodException)
         {
             // Notification availability is controlled by Windows. The review list remains authoritative.
         }

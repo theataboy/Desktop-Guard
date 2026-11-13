@@ -20,4 +20,21 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- The Windows App SDK marks the notification projections as non-publishable, though the app loads them at runtime. -->
+  <Target Name="IncludeAppNotificationProjectionsInPublish"
+      BeforeTargets="_ComputeResolvedCopyLocalPublishAssets;GeneratePublishDependencyFile">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Update="@(ReferenceCopyLocalPaths)"
+          Condition="'%(ReferenceCopyLocalPaths.Filename)' == 'Microsoft.Windows.AppNotifications.Projection'
+              Or '%(ReferenceCopyLocalPaths.Filename)' == 'Microsoft.Windows.AppNotifications.Builder.Projection'">
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ReferenceCopyLocalPaths>
+      <RuntimeCopyLocalItems Update="@(RuntimeCopyLocalItems)"
+          Condition="'%(RuntimeCopyLocalItems.Filename)' == 'Microsoft.Windows.AppNotifications.Projection'
+              Or '%(RuntimeCopyLocalItems.Filename)' == 'Microsoft.Windows.AppNotifications.Builder.Projection'">
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </RuntimeCopyLocalItems>
+    </ItemGroup>
+  </Target>
+
 </Project>
