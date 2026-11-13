@@ -14,6 +14,7 @@ internal sealed class ShortcutFileManager
     private readonly IDesktopRootProvider _rootProvider;
     private readonly IDesktopGuardStateStore _stateStore;
     private readonly IShortcutMoveExecutor _moveExecutor;
+    private readonly DesktopShortcutCreator _desktopShortcutCreator;
     private readonly TimeSpan _stabilityInterval;
 
     public ShortcutFileManager(IDesktopRootProvider rootProvider, IDesktopGuardStateStore stateStore)
@@ -24,8 +25,14 @@ internal sealed class ShortcutFileManager
     internal ShortcutFileManager(
         IDesktopRootProvider rootProvider,
         IDesktopGuardStateStore stateStore,
-        TimeSpan stabilityInterval)
-        : this(rootProvider, stateStore, new ShortcutMoveExecutor(new WindowsShortcutElevationBroker()), stabilityInterval)
+        TimeSpan stabilityInterval,
+        IDesktopShortcutLinkWriter? linkWriter = null)
+        : this(
+            rootProvider,
+            stateStore,
+            new ShortcutMoveExecutor(new WindowsShortcutElevationBroker()),
+            stabilityInterval,
+            linkWriter)
     {
     }
 
@@ -33,7 +40,8 @@ internal sealed class ShortcutFileManager
         IDesktopRootProvider rootProvider,
         IDesktopGuardStateStore stateStore,
         IShortcutMoveExecutor moveExecutor,
-        TimeSpan stabilityInterval)
+        TimeSpan stabilityInterval,
+        IDesktopShortcutLinkWriter? linkWriter = null)
     {
         ArgumentNullException.ThrowIfNull(rootProvider);
         ArgumentNullException.ThrowIfNull(stateStore);
@@ -46,7 +54,23 @@ internal sealed class ShortcutFileManager
         _rootProvider = rootProvider;
         _stateStore = stateStore;
         _moveExecutor = moveExecutor;
+        _desktopShortcutCreator = new DesktopShortcutCreator(
+            rootProvider,
+            linkWriter ?? new WindowsDesktopShortcutLinkWriter());
         _stabilityInterval = stabilityInterval;
+    }
+
+    public void EnsureDesktopShortcutAvailable(string userRootPath)
+    {
+        _desktopShortcutCreator.EnsureDestinationAvailable(userRootPath);
+    }
+
+    public void CreateDesktopShortcut(
+        TrackedShortcut shortcut,
+        string targetPath,
+        Action<byte[]> contentHashPrepared)
+    {
+        _desktopShortcutCreator.Create(shortcut, targetPath, contentHashPrepared);
     }
 
     public Task ParkAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
@@ -64,7 +88,10 @@ internal sealed class ShortcutFileManager
         return MoveBetweenDesktopsCoreAsync(shortcut, allowExistingDestination: false, cancellationToken);
     }
 
-    public Task RetryPendingOperationAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
+    public Task RetryPendingOperationAsync(
+        TrackedShortcut shortcut,
+        CancellationToken cancellationToken,
+        Action<byte[]>? contentHashPrepared = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return shortcut.Operation switch
@@ -75,12 +102,18 @@ internal sealed class ShortcutFileManager
                 shortcut,
                 allowExistingDestination: true,
                 cancellationToken),
+            ShortcutOperation.Creating => RetryDesktopShortcutAsync(shortcut, contentHashPrepared, cancellationToken),
             _ => throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState),
         };
     }
 
     public PendingOperationResolution ResolveInterruptedOperation(TrackedShortcut shortcut)
     {
+        if (shortcut.Operation == ShortcutOperation.Creating)
+        {
+            return _desktopShortcutCreator.ResolveInterruptedOperation(shortcut);
+        }
+
         if (shortcut.Operation is not (ShortcutOperation.Parking or ShortcutOperation.Restoring or ShortcutOperation.Moving)
             || shortcut.OperationId is null
             || shortcut.OperationId == Guid.Empty)
@@ -142,6 +175,27 @@ internal sealed class ShortcutFileManager
 
         bool sourceExists = HasSafeFile(sourcePath, sourceRoot);
         bool destinationExists = HasSafeFile(destinationPath, destinationRoot);
+        bool hasOtherDesktopDuplicate = false;
+        if (shortcut.Operation == ShortcutOperation.Restoring
+            && ShortcutStateTransitions.IsDesktopShortcutName(shortcut.Name))
+        {
+            try
+            {
+                hasOtherDesktopDuplicate = HasDesktopGuardShortcutOnOtherDesktop(shortcut.RootKind);
+            }
+            catch (ShortcutFileOperationException)
+            {
+                return PendingOperationResolution.Ambiguous;
+            }
+        }
+
+        if (hasOtherDesktopDuplicate)
+        {
+            return sourceExists && !destinationExists
+                ? PendingOperationResolution.OperationDidNotMoveFile
+                : PendingOperationResolution.Ambiguous;
+        }
+
         if (sourceExists && !destinationExists)
         {
             return PendingOperationResolution.OperationDidNotMoveFile;
@@ -153,6 +207,22 @@ internal sealed class ShortcutFileManager
         }
 
         return PendingOperationResolution.Ambiguous;
+    }
+
+    private Task RetryDesktopShortcutAsync(
+        TrackedShortcut shortcut,
+        Action<byte[]>? contentHashPrepared,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (contentHashPrepared is null)
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
+        }
+
+        string targetPath = System.Windows.Forms.Application.ExecutablePath;
+        _desktopShortcutCreator.Retry(shortcut, targetPath, contentHashPrepared);
+        return Task.CompletedTask;
     }
 
     public string GetRecoveryFilePath(TrackedShortcut shortcut)
@@ -202,6 +272,12 @@ internal sealed class ShortcutFileManager
         string sourcePath = BuildRecoveryFilePath(recoveryFolder, shortcut.Name);
         ValidateRegularFile(sourcePath, recoveryFolder);
         string destinationPath = ValidateDesktopPath(shortcut, shortcut.RootKind, root);
+        if (ShortcutStateTransitions.IsDesktopShortcutName(shortcut.Name)
+            && HasDesktopGuardShortcutOnOtherDesktop(shortcut.RootKind))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.DesktopShortcutAlreadyExists);
+        }
+
         ElevatedShortcutOperationRequest request = new(
             ElevatedShortcutOperationKind.RestoreFromRecovery,
             shortcut.Id,
@@ -396,6 +472,45 @@ internal sealed class ShortcutFileManager
         }
 
         return Path.GetFullPath(root.Path);
+    }
+
+    private bool HasDesktopGuardShortcutOnOtherDesktop(DesktopRootKind targetRootKind)
+    {
+        DesktopRootKind otherRootKind = targetRootKind == DesktopRootKind.User
+            ? DesktopRootKind.Public
+            : DesktopRootKind.User;
+        DesktopRoot? otherRoot;
+        try
+        {
+            otherRoot = _rootProvider.GetRoots().FirstOrDefault(root => root.Kind == otherRootKind);
+        }
+        catch (Exception exception) when (IsExpectedFileSystemException(exception))
+        {
+            throw MapFileSystemFailure(exception, ShortcutFileOperationFailure.InvalidPath);
+        }
+
+        if (otherRoot is null || !Path.IsPathFullyQualified(otherRoot.Path))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+        }
+
+        try
+        {
+            string root = GetCurrentDesktopRoot(otherRootKind, otherRoot.Path);
+            string parent = Path.GetDirectoryName(root)
+                ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+            ValidateDirectory(root, parent);
+            string path = BuildDesktopPath(root, DesktopShortcutCreator.LinkName);
+            return HasSafeFile(path, root);
+        }
+        catch (ShortcutFileOperationException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (IsExpectedFileSystemException(exception))
+        {
+            throw MapFileSystemFailure(exception, ShortcutFileOperationFailure.InvalidPath);
+        }
     }
 
     private static string ValidateDesktopSource(TrackedShortcut shortcut, DesktopRootKind expectedKind, string root)

@@ -81,6 +81,49 @@ public sealed class DesktopGuardStateStoreTests
     }
 
     [TestMethod]
+    public void Load_VersionTwoStateMigratesWithoutChangingDecisionsOrCheckpoints()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string userRoot = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
+        string publicRoot = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string userPath = Path.Combine(userRoot, "Program.lnk");
+        string publicPath = Path.Combine(publicRoot, "Shared.url");
+        DesktopGuardState versionTwo = new()
+        {
+            SchemaVersion = 2,
+            StartAtSignIn = false,
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.User, userRoot, true, [userPath]),
+                new DesktopRootCheckpoint(DesktopRootKind.Public, publicRoot, true, [publicPath]),
+            ],
+            Shortcuts =
+            [
+                new TrackedShortcut(
+                    Guid.NewGuid(),
+                    DesktopRootKind.User,
+                    userRoot,
+                    "Program.lnk",
+                    userPath,
+                    ShortcutStatus.Pending,
+                    StatusBeforeParking: null,
+                    Operation: ShortcutOperation.None,
+                    RecoveryFolderId: null),
+            ],
+        };
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), JsonSerializer.Serialize(versionTwo));
+        DesktopGuardStateStore store = new(temporaryDirectory.Path);
+
+        DesktopGuardState migrated = store.Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.IsFalse(migrated.StartAtSignIn);
+        Assert.AreEqual(userPath, migrated.Roots.Single(root => root.RootKind == DesktopRootKind.User).KnownPaths.Single());
+        Assert.AreEqual(publicPath, migrated.Roots.Single(root => root.RootKind == DesktopRootKind.Public).KnownPaths.Single());
+        Assert.AreEqual(ShortcutStatus.Pending, migrated.Shortcuts.Single().Status);
+    }
+
+    [TestMethod]
     public void Load_WhenStateIsCorrupt_PreservesTheFileAndFailsClosed()
     {
         using TemporaryDirectory temporaryDirectory = new();

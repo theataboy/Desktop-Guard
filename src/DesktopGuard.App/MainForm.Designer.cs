@@ -18,6 +18,8 @@ partial class MainForm
 
     private Button moveToPublicButton = null!;
 
+    private Button addDesktopShortcutButton = null!;
+
     private Button retryOperationButton = null!;
 
     private Button openRecoveryFolderButton = null!;
@@ -59,6 +61,7 @@ partial class MainForm
         restoreButton = new Button();
         moveToUserButton = new Button();
         moveToPublicButton = new Button();
+        addDesktopShortcutButton = new Button();
         retryOperationButton = new Button();
         openRecoveryFolderButton = new Button();
         startAtSignInCheckBox = new CheckBox();
@@ -99,6 +102,7 @@ partial class MainForm
         commandPanel.Controls.Add(restoreButton);
         commandPanel.Controls.Add(moveToUserButton);
         commandPanel.Controls.Add(moveToPublicButton);
+        commandPanel.Controls.Add(addDesktopShortcutButton);
         commandPanel.Controls.Add(retryOperationButton);
         commandPanel.Controls.Add(openRecoveryFolderButton);
         commandPanel.Controls.Add(startAtSignInCheckBox);
@@ -127,6 +131,9 @@ partial class MainForm
         moveToPublicButton.AutoSize = true;
         moveToPublicButton.Margin = new Padding(0, 0, 8, 4);
         moveToPublicButton.UseVisualStyleBackColor = true;
+        addDesktopShortcutButton.AutoSize = true;
+        addDesktopShortcutButton.Margin = new Padding(0, 0, 8, 4);
+        addDesktopShortcutButton.UseVisualStyleBackColor = true;
         retryOperationButton.AutoSize = true;
         retryOperationButton.Margin = new Padding(0, 0, 8, 4);
         retryOperationButton.UseVisualStyleBackColor = true;

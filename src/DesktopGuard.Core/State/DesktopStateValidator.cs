@@ -11,15 +11,28 @@ public static class DesktopStateValidator
 
     public static bool IsValid(DesktopGuardState state)
     {
-        return IsValidForVersion(state, DesktopGuardState.CurrentSchemaVersion, legacyVersionOne: false);
+        return IsValidForVersion(
+            state,
+            DesktopGuardState.CurrentSchemaVersion,
+            legacyVersionOne: false,
+            allowCreating: true);
     }
 
     public static bool IsValidVersionOne(DesktopGuardState state)
     {
-        return IsValidForVersion(state, 1, legacyVersionOne: true);
+        return IsValidForVersion(state, 1, legacyVersionOne: true, allowCreating: false);
     }
 
-    private static bool IsValidForVersion(DesktopGuardState state, int schemaVersion, bool legacyVersionOne)
+    public static bool IsValidVersionTwo(DesktopGuardState state)
+    {
+        return IsValidForVersion(state, 2, legacyVersionOne: false, allowCreating: false);
+    }
+
+    private static bool IsValidForVersion(
+        DesktopGuardState state,
+        int schemaVersion,
+        bool legacyVersionOne,
+        bool allowCreating)
     {
         ArgumentNullException.ThrowIfNull(state);
 
@@ -40,7 +53,7 @@ public static class DesktopStateValidator
             return false;
         }
 
-        if (state.Shortcuts.Any(shortcut => shortcut is null || !IsValidShortcut(shortcut, legacyVersionOne))
+        if (state.Shortcuts.Any(shortcut => shortcut is null || !IsValidShortcut(shortcut, legacyVersionOne, allowCreating))
             || state.Shortcuts.Select(shortcut => shortcut.Id).Distinct().Count() != state.Shortcuts.Count)
         {
             return false;
@@ -69,7 +82,12 @@ public static class DesktopStateValidator
                 .Where(shortcut => shortcut.Operation == ShortcutOperation.Moving)
                 .Select(shortcut => Path.Combine(shortcut.TargetRootPath!, shortcut.Name))
                 .Distinct(GetPathComparer())
-                .Count() != state.Shortcuts.Count(shortcut => shortcut.Operation == ShortcutOperation.Moving))
+                .Count() != state.Shortcuts.Count(shortcut => shortcut.Operation == ShortcutOperation.Moving)
+            || !legacyVersionOne && state.Shortcuts
+                .Where(shortcut => shortcut.Operation != ShortcutOperation.None)
+                .Select(shortcut => shortcut.OperationId)
+                .Distinct()
+                .Count() != state.Shortcuts.Count(shortcut => shortcut.Operation != ShortcutOperation.None))
         {
             return false;
         }
@@ -89,7 +107,7 @@ public static class DesktopStateValidator
                     && DesktopCandidatePolicy.IsDirectChildOf(root.RootPath, path));
     }
 
-    private static bool IsValidShortcut(TrackedShortcut shortcut, bool legacyVersionOne)
+    private static bool IsValidShortcut(TrackedShortcut shortcut, bool legacyVersionOne, bool allowCreating)
     {
         bool isParked = shortcut.Status == ShortcutStatus.Parked;
         bool hasRecoveryFolder = shortcut.RecoveryFolderId is not null;
@@ -101,12 +119,14 @@ public static class DesktopStateValidator
                 && (isParked == (shortcut.StatusBeforeParking is not null))
                 && shortcut.TargetRootKind is null
                 && shortcut.TargetRootPath is null
-                && shortcut.OperationId is null,
+                && shortcut.OperationId is null
+                && shortcut.OperationContentHash is null,
             ShortcutOperation.Parking => hasRecoveryFolder
                 && !isParked
                 && shortcut.StatusBeforeParking is null
                 && shortcut.TargetRootKind is null
                 && shortcut.TargetRootPath is null
+                && shortcut.OperationContentHash is null
                 && (legacyVersionOne
                     ? shortcut.OperationId is null
                     : shortcut.OperationId == shortcut.RecoveryFolderId),
@@ -115,6 +135,7 @@ public static class DesktopStateValidator
                 && shortcut.StatusBeforeParking is not null
                 && shortcut.TargetRootKind is null
                 && shortcut.TargetRootPath is null
+                && shortcut.OperationContentHash is null
                 && (legacyVersionOne
                     ? shortcut.OperationId is null
                     : shortcut.OperationId is not null && shortcut.OperationId != Guid.Empty),
@@ -127,10 +148,23 @@ public static class DesktopStateValidator
                 && shortcut.TargetRootKind is DesktopRootKind targetRootKind
                 && Enum.IsDefined(targetRootKind)
                 && targetRootKind != shortcut.RootKind
+                && shortcut.OperationContentHash is null
                 && IsBoundedAbsolutePath(shortcut.TargetRootPath)
                 && DesktopCandidatePolicy.IsDirectChildOf(
                     shortcut.TargetRootPath!,
                     Path.Combine(shortcut.TargetRootPath!, shortcut.Name)),
+            ShortcutOperation.Creating => allowCreating
+                && shortcut.RootKind == DesktopRootKind.User
+                && string.Equals(shortcut.Name, ShortcutStateTransitions.DesktopShortcutName, StringComparison.Ordinal)
+                && shortcut.Status == ShortcutStatus.ApprovedVisible
+                && !isParked
+                && !hasRecoveryFolder
+                && shortcut.StatusBeforeParking is null
+                && shortcut.TargetRootKind is null
+                && shortcut.TargetRootPath is null
+                && shortcut.OperationId is not null
+                && shortcut.OperationId != Guid.Empty
+                && (shortcut.OperationContentHash is null || shortcut.OperationContentHash.Length == 32),
             _ => false,
         };
 
@@ -142,6 +176,7 @@ public static class DesktopStateValidator
                     && shortcut.TargetRootKind is null
                     && shortcut.TargetRootPath is null
                     && shortcut.OperationId is null)
+            && (!legacyVersionOne || shortcut.OperationContentHash is null)
             && shortcut.Status is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible or ShortcutStatus.Parked
             && previousStatusIsValid
             && Enum.IsDefined(shortcut.Operation)

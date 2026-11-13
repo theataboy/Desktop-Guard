@@ -12,6 +12,7 @@ internal enum ShortcutFileOperationFailure
     ElevationCancelled,
     ElevationFailed,
     DestinationConflict,
+    DesktopShortcutAlreadyExists,
     RecoveryUnavailable,
     IoFailure,
     AmbiguousRecovery,

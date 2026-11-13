@@ -22,6 +22,12 @@ internal static class AppStrings
 
     public static string MoveToPublicDesktop => GetRequiredString(nameof(MoveToPublicDesktop));
 
+    public static string AddDesktopShortcut => GetRequiredString(nameof(AddDesktopShortcut));
+
+    public static string AddingDesktopShortcut => GetRequiredString(nameof(AddingDesktopShortcut));
+
+    public static string CreatingDesktopShortcut => GetRequiredString(nameof(CreatingDesktopShortcut));
+
     public static string RetryOperation => GetRequiredString(nameof(RetryOperation));
 
     public static string PublicVisibilityConfirmation => GetRequiredString(nameof(PublicVisibilityConfirmation));
@@ -81,6 +87,8 @@ internal static class AppStrings
     public static string OperationFailure => GetRequiredString(nameof(OperationFailure));
 
     public static string DestinationConflict => GetRequiredString(nameof(DestinationConflict));
+
+    public static string DesktopShortcutAlreadyExists => GetRequiredString(nameof(DesktopShortcutAlreadyExists));
 
     public static string FileNotStable => GetRequiredString(nameof(FileNotStable));
 

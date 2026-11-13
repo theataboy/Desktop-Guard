@@ -215,6 +215,250 @@ public sealed class DesktopGuardControllerTests
     }
 
     [TestMethod]
+    public async Task AddDesktopShortcut_CreatesApprovedLinkAndRecordsItInTheBaseline()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager fileManager = new(
+            rootProvider,
+            stateStore,
+            TimeSpan.Zero,
+            new TestDesktopShortcutLinkWriter());
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            fileManager,
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        Assert.IsTrue(controller.CanAddDesktopShortcut);
+
+        await controller.AddDesktopShortcutAsync(CancellationToken.None);
+
+        string shortcutPath = Path.Combine(desktop, DesktopShortcutCreator.LinkName);
+        TrackedShortcut created = controller.State.Shortcuts.Single();
+        Assert.IsTrue(File.Exists(shortcutPath));
+        Assert.AreEqual(ShortcutStatus.ApprovedVisible, created.Status);
+        Assert.AreEqual(ShortcutOperation.None, created.Operation);
+        Assert.IsTrue(controller.State.Roots.Single(root => root.RootKind == DesktopRootKind.User)
+            .KnownPaths.Contains(shortcutPath, StringComparer.OrdinalIgnoreCase));
+        Assert.IsFalse(controller.CanAddDesktopShortcut);
+
+        await controller.RefreshAsync(CancellationToken.None);
+        Assert.HasCount(0, controller.State.Events);
+    }
+
+    [TestMethod]
+    public void AddDesktopShortcut_IsUnavailableWhenPublicDesktopAlreadyContainsDGLink()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string publicShortcut = Path.Combine(publicDesktop, DesktopShortcutCreator.LinkName);
+        File.WriteAllText(publicShortcut, "existing Public link");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(Path.Combine(temporaryDirectory.Path, "AppData"));
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero, new TestDesktopShortcutLinkWriter()),
+            new NoOpStartAtSignInManager(),
+            notifications);
+
+        controller.Initialize();
+
+        Assert.IsFalse(controller.CanAddDesktopShortcut);
+        Assert.IsFalse(File.Exists(Path.Combine(desktop, DesktopShortcutCreator.LinkName)));
+        Assert.AreEqual("existing Public link", File.ReadAllText(publicShortcut));
+    }
+
+    [TestMethod]
+    public void AddDesktopShortcut_RemainsUnavailableUntilPublicDesktopScanCompletes()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Path.Combine(temporaryDirectory.Path, "MissingPublicDesktop");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(Path.Combine(temporaryDirectory.Path, "AppData"));
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero, new TestDesktopShortcutLinkWriter()),
+            new NoOpStartAtSignInManager(),
+            notifications);
+
+        controller.Initialize();
+
+        Assert.IsFalse(controller.CanAddDesktopShortcut);
+        Assert.IsFalse(File.Exists(Path.Combine(desktop, DesktopShortcutCreator.LinkName)));
+    }
+
+    [TestMethod]
+    public async Task AddDesktopShortcut_RechecksPublicDesktopBeforeCreating()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(Path.Combine(temporaryDirectory.Path, "AppData"));
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero, new TestDesktopShortcutLinkWriter()),
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        Assert.IsTrue(controller.CanAddDesktopShortcut);
+        string publicShortcut = Path.Combine(publicDesktop, DesktopShortcutCreator.LinkName);
+        File.WriteAllText(publicShortcut, "late Public link");
+
+        ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => controller.AddDesktopShortcutAsync(CancellationToken.None));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.DesktopShortcutAlreadyExists, exception.Failure);
+        Assert.IsFalse(File.Exists(Path.Combine(desktop, DesktopShortcutCreator.LinkName)));
+        Assert.IsEmpty(controller.State.Shortcuts);
+        Assert.AreEqual("late Public link", File.ReadAllText(publicShortcut));
+    }
+
+    [TestMethod]
+    public async Task RestoreDesktopGuardShortcut_IsBlockedWhenTheOtherDesktopHasOne()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string userShortcut = Path.Combine(desktop, DesktopShortcutCreator.LinkName);
+        File.WriteAllText(userShortcut, "original user DG link");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(Path.Combine(temporaryDirectory.Path, "AppData"));
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager fileManager = new(rootProvider, stateStore, TimeSpan.Zero);
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            fileManager,
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        TrackedShortcut original = controller.State.Shortcuts.Single();
+        await controller.ParkAsync(original.Id, CancellationToken.None);
+        TrackedShortcut parked = controller.State.Shortcuts.Single();
+        string recoveryPath = fileManager.GetRecoveryFilePath(parked);
+        string publicShortcut = Path.Combine(publicDesktop, DesktopShortcutCreator.LinkName);
+        File.WriteAllText(publicShortcut, "existing Public DG link");
+        await controller.RefreshAsync(CancellationToken.None, showNotifications: false);
+
+        ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => controller.RestoreAsync(parked.Id, CancellationToken.None));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.DesktopShortcutAlreadyExists, exception.Failure);
+        Assert.IsFalse(File.Exists(userShortcut));
+        Assert.IsTrue(File.Exists(recoveryPath));
+        Assert.AreEqual("existing Public DG link", File.ReadAllText(publicShortcut));
+        TrackedShortcut stillParked = controller.State.Shortcuts.Single(shortcut => shortcut.Id == parked.Id);
+        Assert.AreEqual(ShortcutStatus.Parked, stillParked.Status);
+        Assert.AreEqual(ShortcutOperation.None, stillParked.Operation);
+    }
+
+    [TestMethod]
+    public async Task AddDesktopShortcut_WhenCreationFails_UpdatesListenersAfterReconcilingTheIntent()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero, new FailingDesktopShortcutLinkWriter()),
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        int stateChangedCount = 0;
+        controller.StateChanged += () => stateChangedCount++;
+
+        await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => controller.AddDesktopShortcutAsync(CancellationToken.None));
+
+        Assert.AreEqual(1, stateChangedCount);
+        Assert.IsTrue(controller.CanAddDesktopShortcut);
+        Assert.IsEmpty(controller.State.Shortcuts);
+        Assert.IsEmpty(Directory.GetDirectories(desktop, ".dg-create-*"));
+    }
+
+    [TestMethod]
+    public void Initialize_CompletesHashMatchedDesktopShortcutStagingFromAnInterruptedCreation()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        DesktopGuardState initial = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, []),
+                new DesktopRootCheckpoint(DesktopRootKind.Public, publicDesktop, true, []),
+            ],
+        };
+        DesktopGuardState pending = ShortcutStateTransitions.BeginCreation(
+            initial,
+            desktop,
+            DesktopShortcutCreator.LinkName);
+        TrackedShortcut operation = pending.Shortcuts.Single();
+        DesktopShortcutCreator creator = new(rootProvider, new TestDesktopShortcutLinkWriter());
+        byte[]? contentHash = null;
+        Assert.Throws<InterruptedCreationException>(() => creator.Create(
+            operation,
+            System.Windows.Forms.Application.ExecutablePath,
+            hash =>
+            {
+                contentHash = hash;
+                throw new InterruptedCreationException();
+            }));
+        TrackedShortcut interrupted = operation with { OperationContentHash = contentHash };
+        stateStore.Save(pending with { Shortcuts = [interrupted] });
+
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero, new TestDesktopShortcutLinkWriter()),
+            new NoOpStartAtSignInManager(),
+            notifications);
+
+        controller.Initialize();
+
+        TrackedShortcut recovered = controller.State.Shortcuts.Single();
+        Assert.IsTrue(File.Exists(recovered.OriginalPath));
+        Assert.AreEqual(ShortcutOperation.None, recovered.Operation);
+        Assert.AreEqual(ShortcutStatus.ApprovedVisible, recovered.Status);
+        Assert.IsFalse(controller.IsOperationUnresolved(recovered.Id));
+        Assert.IsTrue(controller.State.Roots.Single(root => root.RootKind == DesktopRootKind.User)
+            .KnownPaths.Contains(recovered.OriginalPath, StringComparer.OrdinalIgnoreCase));
+    }
+
+    [TestMethod]
     public async Task PublicShortcutManagement_IsDisabledUntilUserDesktopScanCompletes()
     {
         using TemporaryDirectory temporaryDirectory = new();
@@ -271,6 +515,26 @@ public sealed class DesktopGuardControllerTests
         public void SetEnabled(bool enabled)
         {
         }
+    }
+
+    private sealed class TestDesktopShortcutLinkWriter : IDesktopShortcutLinkWriter
+    {
+        public void Create(string linkPath, string targetPath)
+        {
+            File.WriteAllText(linkPath, targetPath);
+        }
+    }
+
+    private sealed class FailingDesktopShortcutLinkWriter : IDesktopShortcutLinkWriter
+    {
+        public void Create(string linkPath, string targetPath)
+        {
+            throw new IOException("The test link writer failed.");
+        }
+    }
+
+    private sealed class InterruptedCreationException : Exception
+    {
     }
 
     private sealed class FaultingStateStore(string dataDirectory) : IDesktopGuardStateStore

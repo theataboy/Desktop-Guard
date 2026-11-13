@@ -14,8 +14,9 @@ Desktop Guard (DG) is a Windows 11 system-tray app that watches desktop shortcut
 - Other new files are recorded locally without being opened or changed.
 - File-system notifications trigger coalesced full scans, with another full scan every 30 seconds. Windows notifications are a convenience; the list is the source of truth.
 - The main window and tray menu can open the recovery folder. Closing the window hides DG to the tray; the tray menu controls start-at-sign-in and exits DG.
+- The main window and tray menu can add a **Desktop Guard** shortcut to the signed-in user's Desktop after complete scans of both desktops. DG won't create another while a same-named DG shortcut is tracked on either desktop or parked in recovery. The shortcut is approved automatically because the user explicitly requested it.
 - Start at sign-in is enabled by default and can be turned off in the window or tray menu.
-- DG never blocks shortcut creation, executes or resolves a shortcut, automatically parks a file, or overwrites a destination. It requests UAC only after an explicit file action receives Access Denied; file locks do not trigger UAC or automatic retries.
+- DG never blocks other shortcut creation, executes or resolves a shortcut, automatically parks a file, or overwrites a destination. Parking, restore, and desktop move actions may request UAC after Access Denied; adding the DG shortcut does not request UAC. File locks do not trigger UAC or automatic retries.
 
 All v1 application text is English. User state, the bounded event log, and recovery files live under `%LOCALAPPDATA%\DesktopGuard`. The event log stores only file names, paths, and timestamps; entries older than 90 days are removed.
 
@@ -27,6 +28,7 @@ All v1 application text is English. User state, the bounded event log, and recov
 4. Use **Move to user Desktop** or **Move to Public Desktop** to move a selected link between desktops. DG asks for confirmation before moving a link to Public because it becomes visible to everyone using the PC. Scanning and approval do not request elevation. If an explicit file operation receives Access Denied, Windows may show a permission prompt for that operation.
 5. If an operation reports that a shortcut is in use, close the installer or app using it and choose **Retry operation**. DG does not retry automatically. If a destination already exists or a safety check fails, DG leaves the files unchanged and reports the issue.
 6. Open the recovery folder from the main-window button or the tray menu to inspect parked shortcuts. Use **Scan now** to request another full scan.
+7. Choose **Add Desktop Guard shortcut** in the main window or tray menu to create `Desktop Guard.lnk` on the signed-in user's Desktop. DG only adds it when neither desktop nor DG recovery already has a tracked copy. DG never replaces or removes an existing copy automatically; move or restore the existing link instead.
 
 ## Project structure
 

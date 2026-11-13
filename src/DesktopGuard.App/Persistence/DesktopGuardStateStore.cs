@@ -104,6 +104,11 @@ internal sealed class DesktopGuardStateStore : IDesktopGuardStateStore
                 };
             }
 
+            if (schemaVersion == 2 && DesktopStateValidator.IsValidVersionTwo(state))
+            {
+                return state with { SchemaVersion = DesktopGuardState.CurrentSchemaVersion };
+            }
+
             if (schemaVersion != DesktopGuardState.CurrentSchemaVersion || !DesktopStateValidator.IsValid(state))
             {
                 throw new StateStoreException(StateStoreFailureKind.Corrupt);

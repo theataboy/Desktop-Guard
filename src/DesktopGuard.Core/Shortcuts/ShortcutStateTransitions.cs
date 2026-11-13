@@ -5,6 +5,116 @@ namespace DesktopGuard.Core.Shortcuts;
 
 public static class ShortcutStateTransitions
 {
+    public const string DesktopShortcutName = "Desktop Guard.lnk";
+
+    public static bool IsDesktopShortcutName(string? name)
+    {
+        return string.Equals(name, DesktopShortcutName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static DesktopGuardState BeginCreation(DesktopGuardState state, string userRootPath, string name)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userRootPath);
+        if (state.SchemaVersion != DesktopGuardState.CurrentSchemaVersion
+            || !Path.IsPathFullyQualified(userRootPath)
+            || !DesktopCandidatePolicy.IsValidWindowsFileName(name)
+            || !string.Equals(Path.GetFileName(name), name, StringComparison.Ordinal)
+            || !string.Equals(name, DesktopShortcutName, StringComparison.Ordinal)
+            || DesktopEntryClassifier.Classify(name) != DesktopEntryKind.Shortcut)
+        {
+            throw new InvalidOperationException("The desktop shortcut cannot be created in the current state.");
+        }
+
+        string root = Path.GetFullPath(userRootPath);
+        DesktopRootCheckpoint? checkpoint = state.Roots.FirstOrDefault(item =>
+            item.RootKind == DesktopRootKind.User && PathsEqual(item.RootPath, root));
+        DesktopRootCheckpoint? publicCheckpoint = state.Roots.FirstOrDefault(item =>
+            item.RootKind == DesktopRootKind.Public);
+        string path = Path.GetFullPath(Path.Combine(root, name));
+        if (checkpoint is not { IsBaselined: true }
+            || !DesktopCandidatePolicy.IsDirectChildOf(root, path)
+            || checkpoint.KnownPaths.Any(knownPath => PathsEqual(knownPath, path))
+            || state.Shortcuts.Any(shortcut => shortcut.RootKind == DesktopRootKind.User
+                && PathsEqual(shortcut.RootPath, root)
+                && PathsEqual(shortcut.OriginalPath, path))
+            || state.Shortcuts.Any(shortcut => IsDesktopShortcutName(shortcut.Name))
+            || publicCheckpoint is not null
+                && publicCheckpoint.KnownPaths.Any(knownPath => PathsEqual(
+                    knownPath,
+                    Path.GetFullPath(Path.Combine(publicCheckpoint.RootPath, name)))))
+        {
+            throw new InvalidOperationException("The desktop shortcut cannot be created in the current state.");
+        }
+
+        TrackedShortcut shortcut = new(
+            Id: Guid.NewGuid(),
+            RootKind: DesktopRootKind.User,
+            RootPath: root,
+            Name: name,
+            OriginalPath: path,
+            Status: ShortcutStatus.ApprovedVisible,
+            StatusBeforeParking: null,
+            Operation: ShortcutOperation.Creating,
+            RecoveryFolderId: null,
+            OperationId: Guid.NewGuid());
+        return state with { Shortcuts = [.. state.Shortcuts, shortcut] };
+    }
+
+    public static DesktopGuardState RecordCreationHash(DesktopGuardState state, Guid shortcutId, byte[] contentHash)
+    {
+        ArgumentNullException.ThrowIfNull(contentHash);
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.Creating
+            || shortcut.OperationId is null
+            || contentHash.Length != 32)
+        {
+            throw new InvalidOperationException("No valid desktop shortcut creation is in progress.");
+        }
+
+        return Replace(state, shortcut with { OperationContentHash = [.. contentHash] });
+    }
+
+    public static DesktopGuardState CompleteCreation(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.Creating
+            || shortcut.RootKind != DesktopRootKind.User
+            || shortcut.Status != ShortcutStatus.ApprovedVisible)
+        {
+            throw new InvalidOperationException("No desktop shortcut creation is in progress.");
+        }
+
+        List<DesktopRootCheckpoint> roots = state.Roots
+            .Select(root => root.RootKind == DesktopRootKind.User && PathsEqual(root.RootPath, shortcut.RootPath)
+                ? root with
+                {
+                    KnownPaths = root.KnownPaths
+                        .Append(shortcut.OriginalPath)
+                        .Distinct(GetPathComparer())
+                        .ToArray(),
+                }
+                : root)
+            .ToList();
+        return Replace(state with { Roots = roots }, shortcut with
+        {
+            Operation = ShortcutOperation.None,
+            OperationId = null,
+            OperationContentHash = null,
+        });
+    }
+
+    public static DesktopGuardState CancelCreation(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.Creating)
+        {
+            throw new InvalidOperationException("No desktop shortcut creation is in progress.");
+        }
+
+        return state with { Shortcuts = state.Shortcuts.Where(item => item.Id != shortcutId).ToList() };
+    }
+
     public static DesktopGuardState Approve(DesktopGuardState state, Guid shortcutId)
     {
         TrackedShortcut shortcut = Find(state, shortcutId);
@@ -213,5 +323,17 @@ public static class ShortcutStateTransitions
             .Select(shortcut => shortcut.Id == updatedShortcut.Id ? updatedShortcut : shortcut)
             .ToList();
         return state with { Shortcuts = shortcuts };
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        return string.Equals(left, right, OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal);
+    }
+
+    private static StringComparer GetPathComparer()
+    {
+        return OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
     }
 }

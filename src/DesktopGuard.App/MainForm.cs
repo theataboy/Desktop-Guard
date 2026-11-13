@@ -33,6 +33,7 @@ internal partial class MainForm : Form
         restoreButton.Text = AppStrings.RestoreSelected;
         moveToUserButton.Text = AppStrings.MoveToUserDesktop;
         moveToPublicButton.Text = AppStrings.MoveToPublicDesktop;
+        addDesktopShortcutButton.Text = AppStrings.AddDesktopShortcut;
         retryOperationButton.Text = AppStrings.RetryOperation;
         openRecoveryFolderButton.Text = AppStrings.OpenRecoveryFolder;
         startAtSignInCheckBox.Text = AppStrings.StartAtSignIn;
@@ -50,11 +51,14 @@ internal partial class MainForm : Form
         restoreButton.Click += async (_, _) => await RestoreSelectedAsync();
         moveToUserButton.Click += async (_, _) => await MoveSelectedAsync(DesktopRootKind.User);
         moveToPublicButton.Click += async (_, _) => await MoveSelectedAsync(DesktopRootKind.Public);
+        addDesktopShortcutButton.Click += async (_, _) => await AddDesktopShortcutAsync();
         retryOperationButton.Click += async (_, _) => await RetrySelectedOperationAsync();
         openRecoveryFolderButton.Click += (_, _) => OpenRecoveryFolder();
         entriesListView.SelectedIndexChanged += (_, _) => UpdateCommandAvailability();
         entriesListView.ItemCheck += EntriesListView_ItemCheck;
         startAtSignInCheckBox.CheckedChanged += async (_, _) => await StartAtSignInCheckBox_CheckedChangedAsync();
+        KeyPreview = true;
+        KeyDown += MainForm_KeyDown;
         _controller.StateChanged += OnControllerStateChanged;
         RefreshView();
     }
@@ -62,6 +66,16 @@ internal partial class MainForm : Form
     public void SetNotificationUnavailable()
     {
         AddRuntimeWarning(AppStrings.NotificationUnavailable);
+    }
+
+    public bool CanAddDesktopShortcut => _canManage && !_isBusy && _controller.CanAddDesktopShortcut;
+
+    public Task AddDesktopShortcutAsync()
+    {
+        return RunCommandAsync(
+            () => _controller.AddDesktopShortcutAsync(_shutdown.Token),
+            AppStrings.AddingDesktopShortcut,
+            showFailureDialog: true);
     }
 
     public void SetRuntimeWarning(string warning)
@@ -198,9 +212,17 @@ internal partial class MainForm : Form
             return;
         }
 
+        string progressMessage = shortcut.Operation == ShortcutOperation.Creating
+            ? AppStrings.AddingDesktopShortcut
+            : shortcut.Operation == ShortcutOperation.Parking
+                ? AppStrings.Parking
+                : shortcut.Operation == ShortcutOperation.Restoring
+                    ? AppStrings.Restoring
+                    : AppStrings.Moving;
         await RunCommandAsync(
             () => _controller.RetryPendingOperationAsync(shortcut.Id, _shutdown.Token),
-            AppStrings.Moving);
+            progressMessage,
+            showFailureDialog: shortcut.Operation == ShortcutOperation.Creating);
     }
 
     private void OpenRecoveryFolder()
@@ -269,7 +291,7 @@ internal partial class MainForm : Form
         }
     }
 
-    private async Task RunCommandAsync(Func<Task> command, string progressMessage)
+    private async Task RunCommandAsync(Func<Task> command, string progressMessage, bool showFailureDialog = false)
     {
         if (!_canManage || _isBusy)
         {
@@ -285,9 +307,18 @@ internal partial class MainForm : Form
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
         {
         }
-        catch (Exception)
+        catch (Exception exception)
         {
             // Detailed exception text can include untrusted paths, so show a bounded resource message instead.
+            if (showFailureDialog)
+            {
+                MessageBox.Show(
+                    this,
+                    GetFailureMessage(exception),
+                    AppStrings.ApplicationTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
         }
         finally
         {
@@ -462,6 +493,7 @@ internal partial class MainForm : Form
         scanButton.Enabled = _canManage && !_isBusy;
         startAtSignInCheckBox.Enabled = _canManage && !_isBusy;
         openRecoveryFolderButton.Enabled = _canManage && !_isBusy;
+        addDesktopShortcutButton.Enabled = CanAddDesktopShortcut;
     }
 
     private ShortcutListEntry? GetSelectedEntry()
@@ -502,6 +534,7 @@ internal partial class MainForm : Form
             ShortcutOperation.Parking => AppStrings.Parking,
             ShortcutOperation.Restoring => AppStrings.Restoring,
             ShortcutOperation.Moving => AppStrings.Moving,
+            ShortcutOperation.Creating => AppStrings.CreatingDesktopShortcut,
             _ => shortcut.Status switch
             {
                 ShortcutStatus.Pending => AppStrings.PendingReview,
@@ -540,6 +573,7 @@ internal partial class MainForm : Form
             return fileException.Failure switch
             {
                 ShortcutFileOperationFailure.DestinationConflict => AppStrings.DestinationConflict,
+                ShortcutFileOperationFailure.DesktopShortcutAlreadyExists => AppStrings.DesktopShortcutAlreadyExists,
                 ShortcutFileOperationFailure.FileNotStable => AppStrings.FileNotStable,
                 ShortcutFileOperationFailure.SourceChanged => AppStrings.FileNotStable,
                 ShortcutFileOperationFailure.SourceMissing => AppStrings.SourceMissing,
@@ -568,6 +602,23 @@ internal partial class MainForm : Form
         return exception is UnauthorizedAccessException or System.Security.SecurityException
             ? AppStrings.AccessDenied
             : AppStrings.OperationFailure;
+    }
+
+    private void MainForm_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.F12 || e.Modifiers != (Keys.Control | Keys.Shift | Keys.Alt))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+        MessageBox.Show(
+            this,
+            EmbeddedContent.Read(),
+            AppStrings.ApplicationTitle,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private void AddRuntimeWarning(string warning)

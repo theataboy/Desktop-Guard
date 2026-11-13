@@ -33,6 +33,15 @@
   <data name="MoveToPublicDesktop" xml:space="preserve">
     <value>Move to Public Desktop</value>
   </data>
+  <data name="AddDesktopShortcut" xml:space="preserve">
+    <value>Add Desktop Guard shortcut</value>
+  </data>
+  <data name="AddingDesktopShortcut" xml:space="preserve">
+    <value>Adding Desktop Guard shortcut...</value>
+  </data>
+  <data name="CreatingDesktopShortcut" xml:space="preserve">
+    <value>Creating shortcut</value>
+  </data>
   <data name="RetryOperation" xml:space="preserve">
     <value>Retry operation</value>
   </data>
@@ -122,6 +131,9 @@
   </data>
   <data name="DestinationConflict" xml:space="preserve">
     <value>A file already exists at the destination. Both files were left unchanged.</value>
+  </data>
+  <data name="DesktopShortcutAlreadyExists" xml:space="preserve">
+    <value>A Desktop Guard shortcut already exists on the other desktop. DG did not create or restore another visible copy.</value>
   </data>
   <data name="FileNotStable" xml:space="preserve">
     <value>The shortcut is still changing. It was left on the Desktop; try again after it settles.</value>

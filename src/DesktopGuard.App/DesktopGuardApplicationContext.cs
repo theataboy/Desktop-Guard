@@ -16,6 +16,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
     private readonly NotifyIcon _trayIcon;
     private readonly ContextMenuStrip _trayMenu;
     private readonly ToolStripMenuItem _startAtSignInMenuItem;
+    private readonly ToolStripMenuItem _addDesktopShortcutMenuItem;
     private DesktopMonitor? _monitor;
     private bool _isExiting;
 
@@ -41,6 +42,12 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         openItem.Click += (_, _) => ShowMainForm();
         ToolStripMenuItem recoveryItem = new(AppStrings.OpenRecoveryFolder);
         recoveryItem.Click += (_, _) => OpenRecoveryFolder();
+        _addDesktopShortcutMenuItem = new ToolStripMenuItem(AppStrings.AddDesktopShortcut);
+        _addDesktopShortcutMenuItem.Click += async (_, _) =>
+        {
+            await _mainForm.AddDesktopShortcutAsync();
+            UpdateTraySettings();
+        };
         _startAtSignInMenuItem = new ToolStripMenuItem(AppStrings.StartAtSignIn)
         {
             CheckOnClick = true,
@@ -51,7 +58,13 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         exitItem.Click += (_, _) => ExitThread();
 
         _trayMenu = new ContextMenuStrip();
-        _trayMenu.Items.AddRange([openItem, recoveryItem, _startAtSignInMenuItem, new ToolStripSeparator(), exitItem]);
+        _trayMenu.Items.AddRange([
+            openItem,
+            _addDesktopShortcutMenuItem,
+            recoveryItem,
+            _startAtSignInMenuItem,
+            new ToolStripSeparator(),
+            exitItem]);
         _trayIcon = new NotifyIcon
         {
             ContextMenuStrip = _trayMenu,
@@ -244,6 +257,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         if (!_mainForm.IsDisposed)
         {
             _startAtSignInMenuItem.Checked = _controller.State.StartAtSignIn;
+            _addDesktopShortcutMenuItem.Enabled = _mainForm.CanAddDesktopShortcut;
         }
     }
 }

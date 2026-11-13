@@ -14,4 +14,5 @@ public sealed record TrackedShortcut(
     Guid? RecoveryFolderId,
     DesktopRootKind? TargetRootKind = null,
     string? TargetRootPath = null,
-    Guid? OperationId = null);
+    Guid? OperationId = null,
+    byte[]? OperationContentHash = null);

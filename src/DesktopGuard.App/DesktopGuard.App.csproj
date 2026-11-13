@@ -20,6 +20,10 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" PrivateAssets="all" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\8d2f.dat" LogicalName="DesktopGuard.App.Data.8d2f" />
+  </ItemGroup>
+
   <!-- The Windows App SDK marks the notification projections as non-publishable, though the app loads them at runtime. -->
   <Target Name="IncludeAppNotificationProjectionsInPublish"
       BeforeTargets="_ComputeResolvedCopyLocalPublishAssets;GeneratePublishDependencyFile">

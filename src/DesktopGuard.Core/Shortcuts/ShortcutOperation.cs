@@ -6,4 +6,5 @@ public enum ShortcutOperation
     Parking,
     Restoring,
     Moving,
+    Creating,
 }
