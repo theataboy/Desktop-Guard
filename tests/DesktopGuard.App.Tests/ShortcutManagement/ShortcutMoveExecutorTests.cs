@@ -1,0 +1,165 @@
+using DesktopGuard.App.ShortcutManagement;
+using DesktopGuard.Core.DesktopScanning;
+
+namespace DesktopGuard.App.Tests.ShortcutManagement;
+
+[TestClass]
+public sealed class ShortcutMoveExecutorTests
+{
+    [TestMethod]
+    public async Task Move_AccessDeniedInvokesOneOperationElevationBroker()
+    {
+        RecordingElevationBroker broker = new();
+        ShortcutMoveExecutor executor = new(
+            broker,
+            (_, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
+        ElevatedShortcutOperationRequest request = CreateRequest();
+
+        ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => executor.MoveAsync(
+                "source.lnk",
+                "destination.lnk",
+                request.OperationId,
+                request,
+                CancellationToken.None));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.ElevationCancelled, exception.Failure);
+        Assert.AreEqual(1, broker.CallCount);
+        Assert.AreSame(request, broker.LastRequest);
+    }
+
+    [TestMethod]
+    public async Task Move_FileLockDoesNotInvokeElevationBroker()
+    {
+        RecordingElevationBroker broker = new();
+        ShortcutMoveExecutor executor = new(
+            broker,
+            (_, _, _, _) => throw new IOException("sharing violation", unchecked((int)0x80070020)));
+        ElevatedShortcutOperationRequest request = CreateRequest();
+
+        IOException exception = await Assert.ThrowsAsync<IOException>(
+            () => executor.MoveAsync(
+                "source.lnk",
+                "destination.lnk",
+                request.OperationId,
+                request,
+                CancellationToken.None));
+
+        Assert.AreEqual(32, exception.HResult & 0xFFFF);
+        Assert.AreEqual(0, broker.CallCount);
+    }
+
+    [TestMethod]
+    public async Task Retry_AccessDeniedMarksElevatedRequestAsRetry()
+    {
+        RecordingElevationBroker broker = new();
+        ShortcutMoveExecutor executor = new(
+            broker,
+            (_, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
+        ElevatedShortcutOperationRequest request = CreateRequest();
+
+        await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => executor.RetryAsync(
+                "missing-source.lnk",
+                "destination.lnk",
+                request.OperationId,
+                request,
+                CancellationToken.None));
+
+        Assert.IsNotNull(broker.LastRequest);
+        Assert.IsTrue(broker.LastRequest.IsRetry);
+    }
+
+    [TestMethod]
+    public void Move_IdenticalExistingDestinationRemainsAConflict()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "destination.lnk");
+        File.WriteAllText(sourcePath, "same shortcut bytes");
+        File.WriteAllText(destinationPath, "same shortcut bytes");
+
+        ShortcutFileOperationException exception = Assert.Throws<ShortcutFileOperationException>(
+            () => ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid()));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.DestinationConflict, exception.Failure);
+        Assert.IsTrue(File.Exists(sourcePath));
+        Assert.IsTrue(File.Exists(destinationPath));
+    }
+
+    [TestMethod]
+    public void RetryMove_IdenticalExistingDestinationCompletesPendingMove()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "destination.lnk");
+        File.WriteAllText(sourcePath, "same shortcut bytes");
+        File.WriteAllText(destinationPath, "same shortcut bytes");
+
+        ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid(), allowExistingDestination: true);
+
+        Assert.IsFalse(File.Exists(sourcePath));
+        Assert.AreEqual("same shortcut bytes", File.ReadAllText(destinationPath));
+    }
+
+    [TestMethod]
+    public void Move_IdenticalDestinationWithEmptyOperationDirectoryResumesCurrentOperation()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "destination.lnk");
+        Guid operationId = Guid.NewGuid();
+        Directory.CreateDirectory(ShortcutFileTransfer.GetOperationDirectory(destinationPath, operationId));
+        File.WriteAllText(sourcePath, "same shortcut bytes");
+        File.WriteAllText(destinationPath, "same shortcut bytes");
+
+        ShortcutFileTransfer.Move(sourcePath, destinationPath, operationId);
+
+        Assert.IsFalse(File.Exists(sourcePath));
+        Assert.AreEqual("same shortcut bytes", File.ReadAllText(destinationPath));
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"DesktopGuard-tests-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            Directory.Delete(Path, recursive: true);
+        }
+    }
+
+    private static ElevatedShortcutOperationRequest CreateRequest()
+    {
+        return new ElevatedShortcutOperationRequest(
+            ElevatedShortcutOperationKind.MoveBetweenDesktops,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            RecoveryFolderId: null,
+            Name: "Program.lnk",
+            SourceRootKind: DesktopRootKind.User,
+            DestinationRootKind: DesktopRootKind.Public);
+    }
+
+    private sealed class RecordingElevationBroker : IShortcutElevationBroker
+    {
+        public int CallCount { get; private set; }
+
+        public ElevatedShortcutOperationRequest? LastRequest { get; private set; }
+
+        public Task ExecuteAsync(ElevatedShortcutOperationRequest request, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            LastRequest = request;
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.ElevationCancelled);
+        }
+    }
+}

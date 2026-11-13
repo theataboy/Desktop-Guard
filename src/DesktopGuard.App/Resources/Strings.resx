@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="ApplicationTitle" xml:space="preserve">
+    <value>Desktop Guard</value>
+  </data>
+  <data name="ScanNow" xml:space="preserve">
+    <value>Scan now</value>
+  </data>
+  <data name="ApproveSelected" xml:space="preserve">
+    <value>Approve selected</value>
+  </data>
+  <data name="ParkSelected" xml:space="preserve">
+    <value>Park selected</value>
+  </data>
+  <data name="RestoreSelected" xml:space="preserve">
+    <value>Restore selected</value>
+  </data>
+  <data name="MoveToUserDesktop" xml:space="preserve">
+    <value>Move to user Desktop</value>
+  </data>
+  <data name="MoveToPublicDesktop" xml:space="preserve">
+    <value>Move to Public Desktop</value>
+  </data>
+  <data name="RetryOperation" xml:space="preserve">
+    <value>Retry operation</value>
+  </data>
+  <data name="PublicVisibilityConfirmation" xml:space="preserve">
+    <value>This shortcut will be visible to everyone who uses this PC. Move it to the Public Desktop?</value>
+  </data>
+  <data name="StartAtSignIn" xml:space="preserve">
+    <value>Start at sign-in</value>
+  </data>
+  <data name="OpenDesktopGuard" xml:space="preserve">
+    <value>Open Desktop Guard</value>
+  </data>
+  <data name="OpenRecoveryFolder" xml:space="preserve">
+    <value>Open recovery folder</value>
+  </data>
+  <data name="Exit" xml:space="preserve">
+    <value>Exit</value>
+  </data>
+  <data name="RecoveryFolderUnavailable" xml:space="preserve">
+    <value>The recovery folder could not be opened. Your recovery data has not been removed.</value>
+  </data>
+  <data name="Scanning" xml:space="preserve">
+    <value>Scanning the desktops…</value>
+  </data>
+  <data name="ScanCompleteFormat" xml:space="preserve">
+    <value>Scan complete: {0} shortcut(s) listed.</value>
+  </data>
+  <data name="ScanCompleteWithIssuesFormat" xml:space="preserve">
+    <value>Scan completed with {0} shortcut(s) listed and {1} issue(s).</value>
+  </data>
+  <data name="UnexpectedScanFailure" xml:space="preserve">
+    <value>The scan could not be completed. No files were changed.</value>
+  </data>
+  <data name="Loading" xml:space="preserve">
+    <value>Loading Desktop Guard…</value>
+  </data>
+  <data name="NoShortcuts" xml:space="preserve">
+    <value>No desktop shortcuts were found.</value>
+  </data>
+  <data name="PendingReview" xml:space="preserve">
+    <value>Pending review</value>
+  </data>
+  <data name="ApprovedVisible" xml:space="preserve">
+    <value>Approved and visible</value>
+  </data>
+  <data name="Parked" xml:space="preserve">
+    <value>Parked in recovery</value>
+  </data>
+  <data name="RecoveryFolder" xml:space="preserve">
+    <value>Recovery folder</value>
+  </data>
+  <data name="Parking" xml:space="preserve">
+    <value>Parking…</value>
+  </data>
+  <data name="Restoring" xml:space="preserve">
+    <value>Restoring…</value>
+  </data>
+  <data name="Moving" xml:space="preserve">
+    <value>Moving…</value>
+  </data>
+  <data name="ReviewRequired" xml:space="preserve">
+    <value>Review required</value>
+  </data>
+  <data name="RecoveryCheckRequired" xml:space="preserve">
+    <value>Recovery needs review</value>
+  </data>
+  <data name="StartupFailure" xml:space="preserve">
+    <value>Desktop Guard could not update its sign-in setting. The saved preference was kept.</value>
+  </data>
+  <data name="NotificationUnavailable" xml:space="preserve">
+    <value>Windows notifications are unavailable. New shortcuts still appear in this list.</value>
+  </data>
+  <data name="StateLoadFailure" xml:space="preserve">
+    <value>Desktop Guard could not safely read its saved state. It has not replaced or reset that data.</value>
+  </data>
+  <data name="StateTooLarge" xml:space="preserve">
+    <value>Desktop Guard's saved state exceeds its safety limit. It has not replaced or reset that data.</value>
+  </data>
+  <data name="StateUnavailable" xml:space="preserve">
+    <value>Desktop Guard could not access its local state or recovery data. Check that the data folder is available.</value>
+  </data>
+  <data name="InitializationFailure" xml:space="preserve">
+    <value>Desktop Guard could not initialize safely. Shortcut management is disabled until the problem is resolved.</value>
+  </data>
+  <data name="OperationFailure" xml:space="preserve">
+    <value>The operation could not be completed. Desktop Guard did not delete or overwrite a file.</value>
+  </data>
+  <data name="DestinationConflict" xml:space="preserve">
+    <value>A file already exists at the destination. Both files were left unchanged.</value>
+  </data>
+  <data name="FileNotStable" xml:space="preserve">
+    <value>The shortcut is still changing. It was left on the Desktop; try again after it settles.</value>
+  </data>
+  <data name="SourceMissing" xml:space="preserve">
+    <value>The shortcut could not be found at its expected location. No other file was changed.</value>
+  </data>
+  <data name="AccessDenied" xml:space="preserve">
+    <value>Desktop Guard could not access the shortcut or recovery folder. Check the folder permissions.</value>
+  </data>
+  <data name="FileLocked" xml:space="preserve">
+    <value>The shortcut is in use. Close the installer or app, then retry the operation. Desktop Guard did not retry automatically.</value>
+  </data>
+  <data name="ElevationCancelled" xml:space="preserve">
+    <value>The Windows permission request was cancelled. The operation was not completed.</value>
+  </data>
+  <data name="ElevationFailed" xml:space="preserve">
+    <value>Windows could not complete the requested shortcut operation with elevated permissions.</value>
+  </data>
+  <data name="InvalidPath" xml:space="preserve">
+    <value>The shortcut path failed a safety check. No file was changed.</value>
+  </data>
+  <data name="RecoveryUnavailable" xml:space="preserve">
+    <value>The recovery folder is unavailable. The shortcut was left unchanged.</value>
+  </data>
+  <data name="AmbiguousRecovery" xml:space="preserve">
+    <value>Desktop Guard found an unexpected file state. It left the files untouched for review.</value>
+  </data>
+  <data name="IoFailure" xml:space="preserve">
+    <value>Windows could not move the shortcut. The original and recovery data were preserved.</value>
+  </data>
+  <data name="ShortcutNotificationTitle" xml:space="preserve">
+    <value>New desktop shortcut</value>
+  </data>
+  <data name="PublicShortcutNotificationTitle" xml:space="preserve">
+    <value>New Public Desktop shortcut</value>
+  </data>
+  <data name="ShortcutNotificationBodyFormat" xml:space="preserve">
+    <value>{0} is ready for review. Click to open Desktop Guard.</value>
+  </data>
+  <data name="UnknownShortcutName" xml:space="preserve">
+    <value>A desktop shortcut</value>
+  </data>
+  <data name="RootWatchFailedFormat" xml:space="preserve">
+    <value>Continuous monitoring could not be started for the {0}. Periodic scans are still active.</value>
+  </data>
+  <data name="RootPathChangedFormat" xml:space="preserve">
+    <value>The {0} location changed. Existing decisions were preserved and this location needs review.</value>
+  </data>
+  <data name="NameColumn" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="LocationColumn" xml:space="preserve">
+    <value>Location</value>
+  </data>
+  <data name="StatusColumn" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="UserDesktop" xml:space="preserve">
+    <value>User Desktop</value>
+  </data>
+  <data name="PublicDesktop" xml:space="preserve">
+    <value>Public Desktop</value>
+  </data>
+  <data name="Issues" xml:space="preserve">
+    <value>Scan details</value>
+  </data>
+  <data name="NoIssuesFound" xml:space="preserve">
+    <value>No scan issues.</value>
+  </data>
+  <data name="RootUnavailableFormat" xml:space="preserve">
+    <value>The {0} could not be located.</value>
+  </data>
+  <data name="RootCouldNotBeReadFormat" xml:space="preserve">
+    <value>The {0} could not be fully read.</value>
+  </data>
+  <data name="EntryCouldNotBeInspectedFormat" xml:space="preserve">
+    <value>An entry on the {0} could not be inspected.</value>
+  </data>
+  <data name="EntryOutsideRootSkippedFormat" xml:space="preserve">
+    <value>An entry outside the {0} was skipped.</value>
+  </data>
+  <data name="ReparsePointSkippedFormat" xml:space="preserve">
+    <value>A reparse-point entry on the {0} was skipped for safety.</value>
+  </data>
+  <data name="EntryLimitReachedFormat" xml:space="preserve">
+    <value>The {0} contains too many entries; scanning stopped at the safety limit.</value>
+  </data>
+  <data name="AdditionalIssuesFormat" xml:space="preserve">
+    <value>{0} additional issue(s) were omitted.</value>
+  </data>
+  <data name="UnknownScanIssue" xml:space="preserve">
+    <value>An unexpected scan issue occurred.</value>
+  </data>
+</root>
