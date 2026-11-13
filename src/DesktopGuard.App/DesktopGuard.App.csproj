@@ -37,4 +37,15 @@
     </ItemGroup>
   </Target>
 
+  <Target Name="AddAppNotificationProjectionsToPublishBundle" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(ReferenceCopyLocalPaths)"
+          Condition="'%(ReferenceCopyLocalPaths.Filename)' == 'Microsoft.Windows.AppNotifications.Projection'
+              Or '%(ReferenceCopyLocalPaths.Filename)' == 'Microsoft.Windows.AppNotifications.Builder.Projection'">
+        <RelativePath>%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
 </Project>
