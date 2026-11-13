@@ -12,12 +12,6 @@ internal static class AppStrings
 
     public static string ScanNow => GetRequiredString(nameof(ScanNow));
 
-    public static string ApproveSelected => GetRequiredString(nameof(ApproveSelected));
-
-    public static string ParkSelected => GetRequiredString(nameof(ParkSelected));
-
-    public static string RestoreSelected => GetRequiredString(nameof(RestoreSelected));
-
     public static string MoveToUserDesktop => GetRequiredString(nameof(MoveToUserDesktop));
 
     public static string MoveToPublicDesktop => GetRequiredString(nameof(MoveToPublicDesktop));
@@ -33,6 +27,39 @@ internal static class AppStrings
     public static string PublicVisibilityConfirmation => GetRequiredString(nameof(PublicVisibilityConfirmation));
 
     public static string StartAtSignIn => GetRequiredString(nameof(StartAtSignIn));
+
+    public static string More => GetRequiredString(nameof(More));
+
+    public static string Settings => GetRequiredString(nameof(Settings));
+
+    public static string SettingsDescription => GetRequiredString(nameof(SettingsDescription));
+
+    public static string Save => GetRequiredString(nameof(Save));
+
+    public static string Cancel => GetRequiredString(nameof(Cancel));
+
+    public static string SearchShortcuts => GetRequiredString(nameof(SearchShortcuts));
+
+    public static string SelectShortcutForActions => GetRequiredString(nameof(SelectShortcutForActions));
+
+    public static string Approve => GetRequiredString(nameof(Approve));
+
+    public static string Park => GetRequiredString(nameof(Park));
+
+    public static string Restore => GetRequiredString(nameof(Restore));
+
+    public static string AllFilterFormat(int count) => Format(nameof(AllFilterFormat), count);
+
+    public static string NeedsReviewFilterFormat(int count) => Format(nameof(NeedsReviewFilterFormat), count);
+
+    public static string ApprovedFilterFormat(int count) => Format(nameof(ApprovedFilterFormat), count);
+
+    public static string RecoveryFilterFormat(int count) => Format(nameof(RecoveryFilterFormat), count);
+
+    public static string IssuesCountFormat(int count) => Format(nameof(IssuesCountFormat), count);
+
+    public static string SelectedShortcutFormat(string name, string status) =>
+        Format(nameof(SelectedShortcutFormat), name, status);
 
     public static string OpenDesktopGuard => GetRequiredString(nameof(OpenDesktopGuard));
 
@@ -53,6 +80,8 @@ internal static class AppStrings
     public static string Loading => GetRequiredString(nameof(Loading));
 
     public static string NoShortcuts => GetRequiredString(nameof(NoShortcuts));
+
+    public static string NoMatchingShortcuts => GetRequiredString(nameof(NoMatchingShortcuts));
 
     public static string PendingReview => GetRequiredString(nameof(PendingReview));
 
@@ -132,10 +161,6 @@ internal static class AppStrings
 
     public static string PublicDesktop => GetRequiredString(nameof(PublicDesktop));
 
-    public static string Issues => GetRequiredString(nameof(Issues));
-
-    public static string NoIssuesFound => GetRequiredString(nameof(NoIssuesFound));
-
     public static string RootUnavailableFormat => GetRequiredString(nameof(RootUnavailableFormat));
 
     public static string RootCouldNotBeReadFormat => GetRequiredString(nameof(RootCouldNotBeReadFormat));
@@ -156,5 +181,10 @@ internal static class AppStrings
     {
         return ResourceManager.GetString(name, CultureInfo.CurrentUICulture)
             ?? throw new MissingManifestResourceException($"The application resource '{name}' is missing.");
+    }
+
+    private static string Format(string name, params object[] arguments)
+    {
+        return string.Format(CultureInfo.CurrentCulture, GetRequiredString(name), arguments);
     }
 }

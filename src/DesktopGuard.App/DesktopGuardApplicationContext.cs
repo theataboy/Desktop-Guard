@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using DesktopGuard.App.Application;
 using DesktopGuard.App.DesktopScanning;
 using DesktopGuard.App.Notifications;
@@ -15,6 +14,8 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
     private readonly MainForm _mainForm;
     private readonly NotifyIcon _trayIcon;
     private readonly ContextMenuStrip _trayMenu;
+    private readonly ToolStripMenuItem _scanNowMenuItem;
+    private readonly ToolStripMenuItem _recoveryMenuItem;
     private readonly ToolStripMenuItem _startAtSignInMenuItem;
     private readonly ToolStripMenuItem _addDesktopShortcutMenuItem;
     private DesktopMonitor? _monitor;
@@ -32,17 +33,37 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         _controller = controller;
         _notifications = notifications;
         _mainForm = new MainForm(controller);
+        _mainForm.ThemeChanged += OnThemeChanged;
+        _mainForm.CommandAvailabilityChanged += UpdateTraySettings;
         MainForm = _mainForm;
         _mainForm.FormClosing += OnMainFormClosing;
         _mainForm.Resize += OnMainFormResize;
         _notifications.NotificationActivated += OnNotificationActivated;
         _controller.StateChanged += OnControllerStateChanged;
 
-        ToolStripMenuItem openItem = new(AppStrings.OpenDesktopGuard);
+        ToolStripMenuItem openItem = new(AppStrings.OpenDesktopGuard)
+        {
+            Font = new Font(SystemFonts.MenuFont ?? SystemFonts.DefaultFont, FontStyle.Bold),
+        };
         openItem.Click += (_, _) => ShowMainForm();
-        ToolStripMenuItem recoveryItem = new(AppStrings.OpenRecoveryFolder);
-        recoveryItem.Click += (_, _) => OpenRecoveryFolder();
-        _addDesktopShortcutMenuItem = new ToolStripMenuItem(AppStrings.AddDesktopShortcut);
+        _scanNowMenuItem = new ToolStripMenuItem(AppStrings.ScanNow)
+        {
+            Enabled = false,
+        };
+        _scanNowMenuItem.Click += async (_, _) =>
+        {
+            await _mainForm.ScanNowAsync();
+            UpdateTraySettings();
+        };
+        _recoveryMenuItem = new ToolStripMenuItem(AppStrings.OpenRecoveryFolder)
+        {
+            Enabled = false,
+        };
+        _recoveryMenuItem.Click += (_, _) => _mainForm.OpenRecoveryFolder(showFailureDialog: true);
+        _addDesktopShortcutMenuItem = new ToolStripMenuItem(AppStrings.AddDesktopShortcut)
+        {
+            Visible = false,
+        };
         _addDesktopShortcutMenuItem.Click += async (_, _) =>
         {
             await _mainForm.AddDesktopShortcutAsync();
@@ -60,11 +81,15 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         _trayMenu = new ContextMenuStrip();
         _trayMenu.Items.AddRange([
             openItem,
+            new ToolStripSeparator(),
+            _scanNowMenuItem,
+            _recoveryMenuItem,
             _addDesktopShortcutMenuItem,
-            recoveryItem,
+            new ToolStripSeparator(),
             _startAtSignInMenuItem,
             new ToolStripSeparator(),
             exitItem]);
+        WindowsTheme.Apply(_trayMenu);
         _trayIcon = new NotifyIcon
         {
             ContextMenuStrip = _trayMenu,
@@ -104,6 +129,8 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         _notifications.NotificationActivated -= OnNotificationActivated;
         _notifications.Dispose();
         _controller.StateChanged -= OnControllerStateChanged;
+        _mainForm.ThemeChanged -= OnThemeChanged;
+        _mainForm.CommandAvailabilityChanged -= UpdateTraySettings;
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _trayMenu.Dispose();
@@ -169,27 +196,6 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         }
     }
 
-    private void OpenRecoveryFolder()
-    {
-        try
-        {
-            _controller.EnsureRecoveryDirectory();
-            _ = Process.Start(new ProcessStartInfo(_controller.RecoveryDirectoryPath)
-            {
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception)
-        {
-            MessageBox.Show(
-                _mainForm,
-                AppStrings.RecoveryFolderUnavailable,
-                AppStrings.ApplicationTitle,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-        }
-    }
-
     private void ShowMainForm()
     {
         _mainForm.ShowAndSelectShortcut(shortcutId: null);
@@ -252,11 +258,22 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         }
     }
 
+    private void OnThemeChanged()
+    {
+        if (!_mainForm.IsDisposed)
+        {
+            WindowsTheme.Apply(_trayMenu);
+        }
+    }
+
     private void UpdateTraySettings()
     {
         if (!_mainForm.IsDisposed)
         {
             _startAtSignInMenuItem.Checked = _controller.State.StartAtSignIn;
+            _scanNowMenuItem.Enabled = _mainForm.CanScanNow;
+            _recoveryMenuItem.Enabled = _mainForm.CanOpenRecoveryFolder;
+            _addDesktopShortcutMenuItem.Visible = _mainForm.CanAddDesktopShortcut;
             _addDesktopShortcutMenuItem.Enabled = _mainForm.CanAddDesktopShortcut;
         }
     }

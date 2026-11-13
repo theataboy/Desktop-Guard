@@ -6,6 +6,7 @@ using DesktopGuard.App.Resources;
 using DesktopGuard.App.ShortcutManagement;
 using DesktopGuard.Core.DesktopScanning;
 using DesktopGuard.Core.Shortcuts;
+using Microsoft.Win32;
 
 namespace DesktopGuard.App;
 
@@ -16,9 +17,15 @@ internal partial class MainForm : Form
     private readonly DesktopGuardController _controller;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly List<string> _runtimeWarnings = [];
+    private readonly ShortcutListPresentation _presentation = new();
     private bool _isUpdatingView;
     private bool _isBusy;
     private bool _canManage;
+    private bool _issuesExpanded;
+
+    public event Action? ThemeChanged;
+
+    public event Action? CommandAvailabilityChanged;
 
     public MainForm(DesktopGuardController controller)
     {
@@ -26,49 +33,78 @@ internal partial class MainForm : Form
         _controller = controller;
         InitializeComponent();
         Text = AppStrings.ApplicationTitle;
-        Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath) ?? SystemIcons.Application;
+        titleLabel.Text = AppStrings.ApplicationTitle;
+        Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath)
+            ?? SystemIcons.Application;
         scanButton.Text = AppStrings.ScanNow;
-        approveButton.Text = AppStrings.ApproveSelected;
-        parkButton.Text = AppStrings.ParkSelected;
-        restoreButton.Text = AppStrings.RestoreSelected;
+        addDesktopShortcutButton.Text = AppStrings.AddDesktopShortcut;
+        moreButton.Text = AppStrings.More;
+        openRecoveryFolderMenuItem.Text = AppStrings.OpenRecoveryFolder;
+        settingsMenuItem.Text = AppStrings.Settings;
+        allFilterButton.Text = AppStrings.AllFilterFormat(0);
+        needsReviewFilterButton.Text = AppStrings.NeedsReviewFilterFormat(0);
+        approvedFilterButton.Text = AppStrings.ApprovedFilterFormat(0);
+        recoveryFilterButton.Text = AppStrings.RecoveryFilterFormat(0);
+        searchTextBox.PlaceholderText = AppStrings.SearchShortcuts;
+        nameColumn.HeaderText = AppStrings.NameColumn;
+        locationColumn.HeaderText = AppStrings.LocationColumn;
+        statusColumn.HeaderText = AppStrings.StatusColumn;
+        approveButton.Text = AppStrings.Approve;
+        parkButton.Text = AppStrings.Park;
+        restoreButton.Text = AppStrings.Restore;
         moveToUserButton.Text = AppStrings.MoveToUserDesktop;
         moveToPublicButton.Text = AppStrings.MoveToPublicDesktop;
-        addDesktopShortcutButton.Text = AppStrings.AddDesktopShortcut;
         retryOperationButton.Text = AppStrings.RetryOperation;
-        openRecoveryFolderButton.Text = AppStrings.OpenRecoveryFolder;
-        startAtSignInCheckBox.Text = AppStrings.StartAtSignIn;
+        issuesToggleButton.Text = AppStrings.IssuesCountFormat(0);
         statusLabel.Text = AppStrings.Loading;
-        nameColumn.Text = AppStrings.NameColumn;
-        locationColumn.Text = AppStrings.LocationColumn;
-        statusColumn.Text = AppStrings.StatusColumn;
-        issuesGroupBox.Text = AppStrings.Issues;
+        selectedItemLabel.Text = AppStrings.SelectShortcutForActions;
+        emptyStateLabel.Text = AppStrings.NoShortcuts;
 
-        scanButton.Click += async (_, _) => await RunCommandAsync(
-            () => _controller.RefreshAsync(_shutdown.Token),
-            AppStrings.Scanning);
+        scanButton.Click += async (_, _) => await ScanNowAsync();
+        addDesktopShortcutButton.Click += async (_, _) => await AddDesktopShortcutAsync();
+        moreButton.Click += (_, _) => ShowMoreMenu();
+        openRecoveryFolderMenuItem.Click += (_, _) => OpenRecoveryFolder();
+        settingsMenuItem.Click += async (_, _) => await OpenSettingsAsync();
         approveButton.Click += async (_, _) => await ApproveSelectedAsync();
         parkButton.Click += async (_, _) => await ParkSelectedAsync();
         restoreButton.Click += async (_, _) => await RestoreSelectedAsync();
         moveToUserButton.Click += async (_, _) => await MoveSelectedAsync(DesktopRootKind.User);
         moveToPublicButton.Click += async (_, _) => await MoveSelectedAsync(DesktopRootKind.Public);
-        addDesktopShortcutButton.Click += async (_, _) => await AddDesktopShortcutAsync();
         retryOperationButton.Click += async (_, _) => await RetrySelectedOperationAsync();
-        openRecoveryFolderButton.Click += (_, _) => OpenRecoveryFolder();
-        entriesListView.SelectedIndexChanged += (_, _) => UpdateCommandAvailability();
-        entriesListView.ItemCheck += EntriesListView_ItemCheck;
-        startAtSignInCheckBox.CheckedChanged += async (_, _) => await StartAtSignInCheckBox_CheckedChangedAsync();
+        allFilterButton.CheckedChanged += (_, _) => FilterButton_CheckedChanged(allFilterButton, ShortcutListFilter.All);
+        needsReviewFilterButton.CheckedChanged += (_, _) => FilterButton_CheckedChanged(needsReviewFilterButton, ShortcutListFilter.NeedsReview);
+        approvedFilterButton.CheckedChanged += (_, _) => FilterButton_CheckedChanged(approvedFilterButton, ShortcutListFilter.Approved);
+        recoveryFilterButton.CheckedChanged += (_, _) => FilterButton_CheckedChanged(recoveryFilterButton, ShortcutListFilter.Recovery);
+        searchTextBox.TextChanged += (_, _) => SearchTextBox_TextChanged();
+        entriesGrid.SelectionChanged += (_, _) =>
+        {
+            if (!_isUpdatingView)
+            {
+                UpdateCommandAvailability();
+            }
+        };
+        entriesGrid.ColumnHeaderMouseClick += EntriesGrid_ColumnHeaderMouseClick;
+        issuesToggleButton.Click += (_, _) => ToggleIssues();
         KeyPreview = true;
         KeyDown += MainForm_KeyDown;
         _controller.StateChanged += OnControllerStateChanged;
+        SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+        ApplyTheme();
         RefreshView();
     }
 
-    public void SetNotificationUnavailable()
-    {
-        AddRuntimeWarning(AppStrings.NotificationUnavailable);
-    }
+    public bool CanScanNow => _canManage && !_isBusy;
+
+    public bool CanOpenRecoveryFolder => _canManage;
 
     public bool CanAddDesktopShortcut => _canManage && !_isBusy && _controller.CanAddDesktopShortcut;
+
+    public Task ScanNowAsync()
+    {
+        return RunCommandAsync(
+            () => _controller.RefreshAsync(_shutdown.Token),
+            AppStrings.Scanning);
+    }
 
     public Task AddDesktopShortcutAsync()
     {
@@ -76,6 +112,39 @@ internal partial class MainForm : Form
             () => _controller.AddDesktopShortcutAsync(_shutdown.Token),
             AppStrings.AddingDesktopShortcut,
             showFailureDialog: true);
+    }
+
+    public void OpenRecoveryFolder(bool showFailureDialog = false)
+    {
+        try
+        {
+            _controller.EnsureRecoveryDirectory();
+            _ = Process.Start(new ProcessStartInfo(_controller.RecoveryDirectoryPath)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception)
+        {
+            if (showFailureDialog)
+            {
+                MessageBox.Show(
+                    this,
+                    AppStrings.RecoveryFolderUnavailable,
+                    AppStrings.ApplicationTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            else
+            {
+                AddRuntimeWarning(AppStrings.RecoveryFolderUnavailable);
+            }
+        }
+    }
+
+    public void SetNotificationUnavailable()
+    {
+        AddRuntimeWarning(AppStrings.NotificationUnavailable);
     }
 
     public void SetRuntimeWarning(string warning)
@@ -120,24 +189,58 @@ internal partial class MainForm : Form
             return;
         }
 
-        foreach (ListViewItem item in entriesListView.Items)
+        DataGridViewRow? row = entriesGrid.Rows
+            .Cast<DataGridViewRow>()
+            .FirstOrDefault(candidate => candidate.Tag is ShortcutListPresentationRow item
+                && item.Entry.Shortcut?.Id == id);
+        if (row is null)
         {
-            if (item.Tag is ShortcutListEntry { Shortcut: { } shortcut } && shortcut.Id == id)
+            _isUpdatingView = true;
+            try
             {
-                item.Selected = true;
-                item.Focused = true;
-                item.EnsureVisible();
-                break;
+                allFilterButton.Checked = true;
+                searchTextBox.Clear();
             }
+            finally
+            {
+                _isUpdatingView = false;
+            }
+
+            _presentation.SetFilter(ShortcutListFilter.All);
+            _presentation.SetSearchText(string.Empty);
+            UpdateFilterLabels();
+            UpdateFilterButtonColors();
+            RefreshGrid(selectedKey: null);
+            row = entriesGrid.Rows
+                .Cast<DataGridViewRow>()
+                .FirstOrDefault(candidate => candidate.Tag is ShortcutListPresentationRow item
+                    && item.Entry.Shortcut?.Id == id);
+        }
+
+        if (row is not null)
+        {
+            row.Selected = true;
+            entriesGrid.CurrentCell = row.Cells[nameColumn.Index];
+            entriesGrid.FirstDisplayedScrollingRowIndex = row.Index;
         }
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _controller.StateChanged -= OnControllerStateChanged;
+        SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _shutdown.Cancel();
         _shutdown.Dispose();
         base.OnFormClosed(e);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (issuesListBox is not null && mainLayout is not null)
+        {
+            issuesListBox.Width = Math.Max(400, mainLayout.ClientSize.Width - mainLayout.Padding.Horizontal);
+        }
     }
 
     private async Task ApproveSelectedAsync()
@@ -225,70 +328,266 @@ internal partial class MainForm : Form
             showFailureDialog: shortcut.Operation == ShortcutOperation.Creating);
     }
 
-    private void OpenRecoveryFolder()
+    private async Task OpenSettingsAsync()
     {
-        try
+        if (!_canManage || _isBusy)
         {
-            _controller.EnsureRecoveryDirectory();
-            _ = Process.Start(new ProcessStartInfo(_controller.RecoveryDirectoryPath)
-            {
-                UseShellExecute = true,
-            });
+            return;
         }
-        catch (Exception)
+
+        using SettingsForm settings = new(_controller.State.StartAtSignIn);
+        if (settings.ShowDialog(this) != DialogResult.OK
+            || settings.StartAtSignIn == _controller.State.StartAtSignIn)
         {
-            AddRuntimeWarning(AppStrings.RecoveryFolderUnavailable);
+            return;
         }
+
+        await RunCommandAsync(
+            () => _controller.SetStartAtSignInAsync(settings.StartAtSignIn, _shutdown.Token),
+            string.Empty,
+            showFailureDialog: true);
     }
 
-    private async Task StartAtSignInCheckBox_CheckedChangedAsync()
+    private void ShowMoreMenu()
+    {
+        if (!moreButton.Enabled)
+        {
+            return;
+        }
+
+        openRecoveryFolderMenuItem.Enabled = _canManage;
+        settingsMenuItem.Enabled = _canManage && !_isBusy;
+        moreMenu.Show(moreButton, new Point(0, moreButton.Height));
+    }
+
+    private void FilterButton_CheckedChanged(RadioButton button, ShortcutListFilter filter)
+    {
+        if (_isUpdatingView || !button.Checked)
+        {
+            return;
+        }
+
+        _presentation.SetFilter(filter);
+        UpdateFilterButtonColors();
+        RefreshGrid(GetCurrentSelectionKey());
+        UpdateCommandAvailability();
+    }
+
+    private void SearchTextBox_TextChanged()
     {
         if (_isUpdatingView)
         {
             return;
         }
 
-        bool enabled = startAtSignInCheckBox.Checked;
-        await RunCommandAsync(
-            () => _controller.SetStartAtSignInAsync(enabled, _shutdown.Token),
-            string.Empty);
+        _presentation.SetSearchText(searchTextBox.Text);
+        UpdateFilterLabels();
+        RefreshGrid(GetCurrentSelectionKey());
+        UpdateCommandAvailability();
     }
 
-    private void EntriesListView_ItemCheck(object? sender, ItemCheckEventArgs e)
+    private void EntriesGrid_ColumnHeaderMouseClick(object? sender, DataGridViewCellMouseEventArgs e)
     {
-        if (!_canManage || _isUpdatingView || _isBusy || e.Index < 0 || e.Index >= entriesListView.Items.Count)
+        if (e.Button != MouseButtons.Left || e.ColumnIndex < 0)
         {
             return;
         }
 
-        ListViewItem item = entriesListView.Items[e.Index];
-        if (item.Tag is not ShortcutListEntry entry
-            || entry.Shortcut is not TrackedShortcut shortcut
-            || !_controller.IsManageableShortcut(shortcut.Id)
-            || shortcut.Operation != ShortcutOperation.None)
+        ShortcutListSortColumn column = entriesGrid.Columns[e.ColumnIndex].Name switch
         {
-            e.NewValue = e.CurrentValue;
+            "locationColumn" => ShortcutListSortColumn.Location,
+            "statusColumn" => ShortcutListSortColumn.Status,
+            _ => ShortcutListSortColumn.Name,
+        };
+        _presentation.SortBy(column);
+        RefreshGrid(GetCurrentSelectionKey());
+    }
+
+    private void RefreshView(string? progressMessage = null)
+    {
+        if (IsDisposed)
+        {
             return;
         }
 
-        if (shortcut.Status == ShortcutStatus.ApprovedVisible && e.NewValue == CheckState.Unchecked)
+        ShortcutSelectionKey? selectedKey = GetCurrentSelectionKey();
+        _isUpdatingView = true;
+        try
         {
-            e.NewValue = e.CurrentValue;
-            _ = BeginInvoke(new Action(async () => await RunCommandAsync(
-                () => _controller.ParkAsync(shortcut.Id, _shutdown.Token),
-                AppStrings.Parking)));
+            IReadOnlyList<ShortcutListPresentationRow> rows = _controller.GetShortcutList()
+                .Select(CreatePresentationRow)
+                .ToArray();
+            _presentation.SetRows(rows);
+            UpdateFilterLabels();
+            UpdateFilterButtonColors();
+            RefreshGrid(selectedKey);
+            UpdateCommandAvailability();
+            DisplayStatus(progressMessage, rows.Count);
+            DisplayIssues();
         }
-        else if (shortcut.Status == ShortcutStatus.Parked && e.NewValue == CheckState.Checked)
+        finally
         {
-            e.NewValue = e.CurrentValue;
-            _ = BeginInvoke(new Action(async () => await RunCommandAsync(
-                () => _controller.RestoreAsync(shortcut.Id, _shutdown.Token),
-                AppStrings.Restoring)));
+            _isUpdatingView = false;
+        }
+    }
+
+    private void RefreshGrid(ShortcutSelectionKey? selectedKey)
+    {
+        bool wasUpdating = _isUpdatingView;
+        _isUpdatingView = true;
+        try
+        {
+            entriesGrid.Rows.Clear();
+            bool selectionRestored = false;
+            foreach (ShortcutListPresentationRow item in _presentation.GetVisibleRows())
+            {
+                int index = entriesGrid.Rows.Add(item.Entry.Name, item.Location, item.Status);
+                DataGridViewRow row = entriesGrid.Rows[index];
+                row.Tag = item;
+                WindowsTheme.ApplyStatusCell(
+                    row.Cells[statusColumn.Index],
+                    item.NeedsReview,
+                    item.Approved,
+                    item.Recovery);
+                if (selectedKey is ShortcutSelectionKey key && key.Matches(item.Entry))
+                {
+                    row.Selected = true;
+                    entriesGrid.CurrentCell = row.Cells[nameColumn.Index];
+                    selectionRestored = true;
+                }
+            }
+
+            emptyStateLabel.Text = _presentation.TotalCount == 0
+                ? AppStrings.NoShortcuts
+                : AppStrings.NoMatchingShortcuts;
+            bool scanComplete = _controller.ScanIssues.Count == 0
+                && _controller.LastFailure is null
+                && _controller.StartupFailure is null;
+            emptyStateLabel.Visible = entriesGrid.Rows.Count == 0
+                && (_presentation.TotalCount > 0 || _canManage && scanComplete);
+
+            if (!selectionRestored)
+            {
+                entriesGrid.ClearSelection();
+                entriesGrid.CurrentCell = null;
+            }
+
+            nameColumn.HeaderCell.SortGlyphDirection = _presentation.SortColumn == ShortcutListSortColumn.Name
+                ? _presentation.SortDescending ? SortOrder.Descending : SortOrder.Ascending
+                : SortOrder.None;
+            locationColumn.HeaderCell.SortGlyphDirection = _presentation.SortColumn == ShortcutListSortColumn.Location
+                ? _presentation.SortDescending ? SortOrder.Descending : SortOrder.Ascending
+                : SortOrder.None;
+            statusColumn.HeaderCell.SortGlyphDirection = _presentation.SortColumn == ShortcutListSortColumn.Status
+                ? _presentation.SortDescending ? SortOrder.Descending : SortOrder.Ascending
+                : SortOrder.None;
+        }
+        finally
+        {
+            _isUpdatingView = wasUpdating;
+        }
+    }
+
+    private ShortcutListPresentationRow CreatePresentationRow(ShortcutListEntry entry)
+    {
+        string status = GetStatusName(entry);
+        TrackedShortcut? shortcut = entry.Shortcut;
+        bool recovery = entry.Status == ShortcutStatus.Parked
+            || shortcut is not null && (shortcut.Operation != ShortcutOperation.None
+                || !_controller.IsManageableShortcut(shortcut.Id));
+        bool needsReview = !recovery && (shortcut is null || entry.Status == ShortcutStatus.Pending);
+        bool approved = !recovery && entry.Status == ShortcutStatus.ApprovedVisible;
+        return new ShortcutListPresentationRow(
+            entry,
+            GetLocationName(entry),
+            status,
+            needsReview,
+            approved,
+            recovery);
+    }
+
+    private void UpdateFilterLabels()
+    {
+        allFilterButton.Text = AppStrings.AllFilterFormat(_presentation.CountFor(ShortcutListFilter.All));
+        needsReviewFilterButton.Text = AppStrings.NeedsReviewFilterFormat(_presentation.CountFor(ShortcutListFilter.NeedsReview));
+        approvedFilterButton.Text = AppStrings.ApprovedFilterFormat(_presentation.CountFor(ShortcutListFilter.Approved));
+        recoveryFilterButton.Text = AppStrings.RecoveryFilterFormat(_presentation.CountFor(ShortcutListFilter.Recovery));
+    }
+
+    private void UpdateFilterButtonColors()
+    {
+        foreach (RadioButton button in new[]
+                 {
+                     allFilterButton,
+                     needsReviewFilterButton,
+                     approvedFilterButton,
+                     recoveryFilterButton,
+                 })
+        {
+            WindowsTheme.ApplyFilterButton(button);
+        }
+    }
+
+    private void ApplyTheme()
+    {
+        WindowsTheme.Apply(this);
+        WindowsTheme.Apply(moreMenu);
+        UpdateFilterButtonColors();
+        foreach (DataGridViewRow row in entriesGrid.Rows)
+        {
+            if (row.Tag is ShortcutListPresentationRow item)
+            {
+                WindowsTheme.ApplyStatusCell(
+                    row.Cells[statusColumn.Index],
+                    item.NeedsReview,
+                    item.Approved,
+                    item.Recovery);
+            }
+        }
+
+        ThemeChanged?.Invoke();
+    }
+
+    private void UpdateCommandAvailability()
+    {
+        ShortcutListPresentationRow? selectedRow = GetSelectedRow();
+        ShortcutListEntry? selected = selectedRow?.Entry;
+        TrackedShortcut? shortcut = selected?.Shortcut;
+        bool manageable = shortcut is not null && _controller.IsManageableShortcut(shortcut.Id);
+        bool noOperation = manageable && shortcut!.Operation == ShortcutOperation.None;
+        bool activeShortcut = shortcut?.Status is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible;
+        bool canApprove = _canManage && noOperation && shortcut?.Status == ShortcutStatus.Pending;
+        bool canPark = _canManage && noOperation && activeShortcut;
+        bool canRestore = _canManage && noOperation && shortcut?.Status == ShortcutStatus.Parked;
+        bool canMoveToUser = _canManage && noOperation && activeShortcut
+            && selected?.RootKind == DesktopRootKind.Public;
+        bool canMoveToPublic = _canManage && noOperation && activeShortcut
+            && selected?.RootKind == DesktopRootKind.User;
+        bool canRetry = _canManage && manageable && shortcut?.Operation != ShortcutOperation.None
+            && shortcut is not null
+            && _controller.IsOperationUnresolved(shortcut.Id);
+
+        SetActionButton(approveButton, canApprove);
+        SetActionButton(parkButton, canPark);
+        SetActionButton(restoreButton, canRestore);
+        SetActionButton(moveToUserButton, canMoveToUser);
+        SetActionButton(moveToPublicButton, canMoveToPublic);
+        SetActionButton(retryOperationButton, canRetry);
+
+        if (selectedRow is null)
+        {
+            selectedItemLabel.Text = AppStrings.SelectShortcutForActions;
         }
         else
         {
-            e.NewValue = e.CurrentValue;
+            selectedItemLabel.Text = AppStrings.SelectedShortcutFormat(selected!.Name, selectedRow.Status);
         }
+
+        scanButton.Enabled = CanScanNow;
+        addDesktopShortcutButton.Visible = _canManage && _controller.CanAddDesktopShortcut;
+        addDesktopShortcutButton.Enabled = CanAddDesktopShortcut;
+        moreButton.Enabled = _canManage;
+        CommandAvailabilityChanged?.Invoke();
     }
 
     private async Task RunCommandAsync(Func<Task> command, string progressMessage, bool showFailureDialog = false)
@@ -351,51 +650,25 @@ internal partial class MainForm : Form
         RefreshView();
     }
 
-    private void RefreshView(string? progressMessage = null)
+    private void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
     {
-        if (IsDisposed)
+        if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color)
+            || IsDisposed || !IsHandleCreated)
         {
             return;
         }
 
-        Guid? selectedId = GetSelectedEntry()?.Shortcut?.Id;
-        _isUpdatingView = true;
         try
         {
-            entriesListView.BeginUpdate();
-            entriesListView.Items.Clear();
-            IReadOnlyList<ShortcutListEntry> entries = _controller.GetShortcutList();
-            foreach (ShortcutListEntry entry in entries)
-            {
-                ListViewItem item = new(entry.Name)
-                {
-                    Checked = entry.Status == ShortcutStatus.ApprovedVisible,
-                    Tag = entry,
-                };
-                item.SubItems.Add(GetLocationName(entry));
-                item.SubItems.Add(GetStatusName(entry));
-                entriesListView.Items.Add(item);
-
-                if (selectedId is Guid id && entry.Shortcut?.Id == id)
-                {
-                    item.Selected = true;
-                    item.Focused = true;
-                }
-            }
-
-            entriesListView.EndUpdate();
-            startAtSignInCheckBox.Checked = _controller.State.StartAtSignIn;
-            UpdateCommandAvailability();
-            DisplayStatus(progressMessage);
-            DisplayIssues();
+            BeginInvoke(new Action(ApplyTheme));
         }
-        finally
+        catch (InvalidOperationException)
         {
-            _isUpdatingView = false;
+            // The window is closing.
         }
     }
 
-    private void DisplayStatus(string? progressMessage)
+    private void DisplayStatus(string? progressMessage, int itemCount)
     {
         if (!string.IsNullOrWhiteSpace(progressMessage))
         {
@@ -421,7 +694,6 @@ internal partial class MainForm : Form
             return;
         }
 
-        int itemCount = _controller.GetShortcutList().Count;
         statusLabel.Text = _controller.ScanIssues.Count == 0
             ? string.Format(AppStrings.ScanCompleteFormat, itemCount)
             : string.Format(AppStrings.ScanCompleteWithIssuesFormat, itemCount, _controller.ScanIssues.Count);
@@ -429,9 +701,6 @@ internal partial class MainForm : Form
 
     private void DisplayIssues()
     {
-        issuesListBox.BeginUpdate();
-        issuesListBox.Items.Clear();
-
         List<string> messages = [];
         if (_controller.LastFailure is not null)
         {
@@ -445,62 +714,75 @@ internal partial class MainForm : Form
 
         messages.AddRange(_runtimeWarnings);
         messages.AddRange(_controller.ScanIssues.Take(MaximumDisplayedIssues).Select(GetIssueMessage));
-
-        if (messages.Count == 0)
+        int totalMessageCount = (_controller.LastFailure is null ? 0 : 1)
+            + (_controller.StartupFailure is null ? 0 : 1)
+            + _runtimeWarnings.Count
+            + _controller.ScanIssues.Count;
+        issuesPanel.Visible = totalMessageCount > 0;
+        if (totalMessageCount == 0)
         {
-            issuesListBox.Items.Add(_controller.GetShortcutList().Count == 0
-                ? AppStrings.NoShortcuts
-                : AppStrings.NoIssuesFound);
+            _issuesExpanded = false;
+            issuesListBox.Visible = false;
+            return;
         }
-        else
-        {
-            foreach (string message in messages.Take(MaximumDisplayedIssues))
-            {
-                issuesListBox.Items.Add(message);
-            }
 
-            if (messages.Count > MaximumDisplayedIssues)
-            {
-                issuesListBox.Items.Add(string.Format(
-                    AppStrings.AdditionalIssuesFormat,
-                    messages.Count - MaximumDisplayedIssues));
-            }
+        issuesToggleButton.Text = AppStrings.IssuesCountFormat(totalMessageCount);
+        issuesToggleButton.TextAlign = ContentAlignment.MiddleLeft;
+        issuesListBox.BeginUpdate();
+        issuesListBox.Items.Clear();
+        foreach (string message in messages.Take(MaximumDisplayedIssues))
+        {
+            issuesListBox.Items.Add(message);
+        }
+
+        if (totalMessageCount > MaximumDisplayedIssues)
+        {
+            issuesListBox.Items.Add(string.Format(
+                AppStrings.AdditionalIssuesFormat,
+                totalMessageCount - MaximumDisplayedIssues));
         }
 
         issuesListBox.EndUpdate();
+        issuesListBox.Visible = _issuesExpanded;
     }
 
-    private void UpdateCommandAvailability()
+    private void ToggleIssues()
     {
-        ShortcutListEntry? selected = GetSelectedEntry();
-        TrackedShortcut? shortcut = selected?.Shortcut;
-        bool manageable = shortcut is not null && _controller.IsManageableShortcut(shortcut.Id);
-        bool noOperation = manageable && shortcut!.Operation == ShortcutOperation.None;
-        bool activeShortcut = shortcut?.Status is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible;
-        approveButton.Enabled = _canManage && !_isBusy && noOperation
-            && shortcut?.Status == ShortcutStatus.Pending;
-        parkButton.Enabled = _canManage && !_isBusy && noOperation && activeShortcut;
-        restoreButton.Enabled = _canManage && !_isBusy && noOperation
-            && shortcut?.Status == ShortcutStatus.Parked;
-        moveToUserButton.Enabled = _canManage && !_isBusy && noOperation && activeShortcut
-            && selected?.RootKind == DesktopRootKind.Public;
-        moveToPublicButton.Enabled = _canManage && !_isBusy && noOperation && activeShortcut
-            && selected?.RootKind == DesktopRootKind.User;
-        retryOperationButton.Enabled = _canManage && !_isBusy && manageable
-            && shortcut?.Operation != ShortcutOperation.None
-            && shortcut is not null
-            && _controller.IsOperationUnresolved(shortcut.Id);
-        scanButton.Enabled = _canManage && !_isBusy;
-        startAtSignInCheckBox.Enabled = _canManage && !_isBusy;
-        openRecoveryFolderButton.Enabled = _canManage && !_isBusy;
-        addDesktopShortcutButton.Enabled = CanAddDesktopShortcut;
+        _issuesExpanded = !_issuesExpanded;
+        issuesListBox.Visible = _issuesExpanded;
+    }
+
+    private void SetActionButton(Button button, bool canRun)
+    {
+        button.Visible = canRun;
+        button.Enabled = canRun && !_isBusy;
     }
 
     private ShortcutListEntry? GetSelectedEntry()
     {
-        return entriesListView.SelectedItems.Count == 0
+        return GetSelectedRow()?.Entry;
+    }
+
+    private ShortcutListPresentationRow? GetSelectedRow()
+    {
+        return entriesGrid.CurrentRow?.Tag as ShortcutListPresentationRow
+            ?? entriesGrid.SelectedRows.Cast<DataGridViewRow>()
+                .Select(row => row.Tag as ShortcutListPresentationRow)
+                .FirstOrDefault(row => row is not null);
+    }
+
+    private ShortcutSelectionKey? GetCurrentSelectionKey()
+    {
+        return GetSelectionKey(GetSelectedEntry());
+    }
+
+    private static ShortcutSelectionKey? GetSelectionKey(ShortcutListEntry? entry)
+    {
+        return entry is null
             ? null
-            : entriesListView.SelectedItems[0].Tag as ShortcutListEntry;
+            : entry.Shortcut is TrackedShortcut shortcut
+                ? new ShortcutSelectionKey(shortcut.Id, entry.RootKind, entry.Name)
+                : new ShortcutSelectionKey(null, entry.RootKind, entry.Name);
     }
 
     private static string GetLocationName(ShortcutListEntry entry)
@@ -646,6 +928,18 @@ internal partial class MainForm : Form
         {
             _runtimeWarnings.Add(warning);
             RefreshView();
+        }
+    }
+
+    private sealed record ShortcutSelectionKey(Guid? Id, DesktopRootKind RootKind, string Name)
+    {
+        public bool Matches(ShortcutListEntry entry)
+        {
+            return Id is Guid id
+                ? entry.Shortcut?.Id == id
+                : entry.Shortcut is null
+                    && entry.RootKind == RootKind
+                    && string.Equals(entry.Name, Name, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

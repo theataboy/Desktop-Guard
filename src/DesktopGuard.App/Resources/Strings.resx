@@ -18,15 +18,6 @@
   <data name="ScanNow" xml:space="preserve">
     <value>Scan now</value>
   </data>
-  <data name="ApproveSelected" xml:space="preserve">
-    <value>Approve selected</value>
-  </data>
-  <data name="ParkSelected" xml:space="preserve">
-    <value>Park selected</value>
-  </data>
-  <data name="RestoreSelected" xml:space="preserve">
-    <value>Restore selected</value>
-  </data>
   <data name="MoveToUserDesktop" xml:space="preserve">
     <value>Move to user Desktop</value>
   </data>
@@ -50,6 +41,54 @@
   </data>
   <data name="StartAtSignIn" xml:space="preserve">
     <value>Start at sign-in</value>
+  </data>
+  <data name="More" xml:space="preserve">
+    <value>More</value>
+  </data>
+  <data name="Settings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="SettingsDescription" xml:space="preserve">
+    <value>Choose whether Desktop Guard starts automatically when you sign in.</value>
+  </data>
+  <data name="Save" xml:space="preserve">
+    <value>Save</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="SearchShortcuts" xml:space="preserve">
+    <value>Search shortcuts</value>
+  </data>
+  <data name="SelectShortcutForActions" xml:space="preserve">
+    <value>Select a shortcut to see available actions.</value>
+  </data>
+  <data name="Approve" xml:space="preserve">
+    <value>Approve</value>
+  </data>
+  <data name="Park" xml:space="preserve">
+    <value>Park</value>
+  </data>
+  <data name="Restore" xml:space="preserve">
+    <value>Restore</value>
+  </data>
+  <data name="AllFilterFormat" xml:space="preserve">
+    <value>All ({0})</value>
+  </data>
+  <data name="NeedsReviewFilterFormat" xml:space="preserve">
+    <value>Needs review ({0})</value>
+  </data>
+  <data name="ApprovedFilterFormat" xml:space="preserve">
+    <value>Approved ({0})</value>
+  </data>
+  <data name="RecoveryFilterFormat" xml:space="preserve">
+    <value>Recovery ({0})</value>
+  </data>
+  <data name="IssuesCountFormat" xml:space="preserve">
+    <value>Issues ({0})</value>
+  </data>
+  <data name="SelectedShortcutFormat" xml:space="preserve">
+    <value>{0} | {1}</value>
   </data>
   <data name="OpenDesktopGuard" xml:space="preserve">
     <value>Open Desktop Guard</value>
@@ -80,6 +119,9 @@
   </data>
   <data name="NoShortcuts" xml:space="preserve">
     <value>No desktop shortcuts were found.</value>
+  </data>
+  <data name="NoMatchingShortcuts" xml:space="preserve">
+    <value>No shortcuts match the current search and filters.</value>
   </data>
   <data name="PendingReview" xml:space="preserve">
     <value>Pending review</value>
@@ -200,9 +242,6 @@
   </data>
   <data name="Issues" xml:space="preserve">
     <value>Scan details</value>
-  </data>
-  <data name="NoIssuesFound" xml:space="preserve">
-    <value>No scan issues.</value>
   </data>
   <data name="RootUnavailableFormat" xml:space="preserve">
     <value>The {0} could not be located.</value>

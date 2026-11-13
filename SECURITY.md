@@ -12,6 +12,7 @@ DG is a least-privilege tool for detecting and reversibly managing desktop short
 - DG's local settings, inventory, event log, and recovery files.
 - Filesystem watcher events and Windows notification activation data.
 - The current user's startup `Run` registry value and the path to the running DG executable.
+- The current user's Windows app-theme preference, used only to choose presentation colors.
 - Build dependencies and the published application folder.
 
 Treat all of these inputs as untrusted, including data read back from DG's own files.
@@ -35,6 +36,7 @@ Treat all of these inputs as untrusted, including data read back from DG's own f
 - Keep the state file bounded to 4 MiB and write it to a temporary file before replacing the prior state. Reject oversized or malformed data without replacing the existing state.
 - Keep notification activation data to a validated opaque shortcut ID resolved against current local state. Never put raw paths into activation arguments. Sanitize and bound names shown in notification text, and show at most five notifications per scan.
 - Register only the DG-owned value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The command targets the current DG executable and a fixed `--background` argument; DG does not accept arbitrary commands from state or notification data.
+- Read only the current user's `AppsUseLightTheme` personalization value for UI colors. Treat it as untrusted presentation input, fall back to the light palette if it is unavailable, and let Windows high-contrast colors take precedence. It must not affect shortcut policy, persistence, or file operations.
 - Keep event records local and limited to file name, path, and timestamp for at most 90 days. Bound notification text and preserve recovery data separately from the event log.
 - Migrate schema v1 by preserving its Public checkpoint: paths in that checkpoint are the existing approved baseline; Public shortcut paths absent from it become pending when first scanned after migration. Migrate schema v2 without changing existing decisions or checkpoints. The schema v3 creation-operation hash is accepted only for a validated in-progress User Desktop shortcut creation. If state is corrupt, preserve it and require a safe recovery path; never silently reset approvals or reinterpret either Desktop as a new baseline. Do not trim recovery records to meet a storage cap; fail closed and preserve the prior state.
 
