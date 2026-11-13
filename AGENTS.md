@@ -12,7 +12,7 @@
 - Park only after the user explicitly chooses it and the shortcut is accessible with the same size and last-write time across checks at least one second apart. Recheck immediately before moving. A stable-file check is a race guard, not proof that an installer has finished.
 - Store user state and recovery data under `%LOCALAPPDATA%\DesktopGuard`, never in the repository or beside the executable.
 - Keep the event log local and limited to the file name, path, and timestamp; prune entries older than 90 days. Provide recovery-folder commands in both the tray menu and main window.
-- Start at sign-in is enabled by default and can be disabled. Register only DG's own value under the current user's `Run` key; never use a service.
+- Start at sign-in is enabled by default and can be disabled. Starting minimized is also enabled by default and can be changed in Settings. Keep the main window hidden until this preference has loaded. Register only DG's own value under the current user's `Run` key; include only DG's fixed `--background` argument when that preference is enabled; never use a service.
 - Treat file-system watcher events as coalesced hints. Keep the queue bounded and perform a full scan at startup, after watcher errors, and periodically.
 - Show at most five Windows notifications per scan. Keep the review list authoritative if Windows suppresses notifications; notification arguments may contain only validated opaque shortcut IDs.
 

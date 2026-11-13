@@ -22,6 +22,7 @@ internal partial class MainForm : Form
     private bool _isBusy;
     private bool _canManage;
     private bool _issuesExpanded;
+    private bool _shutdownStarted;
 
     public event Action? ThemeChanged;
 
@@ -227,10 +228,15 @@ internal partial class MainForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        _controller.StateChanged -= OnControllerStateChanged;
-        SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-        _shutdown.Cancel();
-        _shutdown.Dispose();
+        if (!_shutdownStarted)
+        {
+            _shutdownStarted = true;
+            _controller.StateChanged -= OnControllerStateChanged;
+            SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            _shutdown.Cancel();
+            _shutdown.Dispose();
+        }
+
         base.OnFormClosed(e);
     }
 
@@ -335,15 +341,21 @@ internal partial class MainForm : Form
             return;
         }
 
-        using SettingsForm settings = new(_controller.State.StartAtSignIn);
+        using SettingsForm settings = new(
+            _controller.State.StartAtSignIn,
+            _controller.State.StartMinimized);
         if (settings.ShowDialog(this) != DialogResult.OK
-            || settings.StartAtSignIn == _controller.State.StartAtSignIn)
+            || settings.StartAtSignIn == _controller.State.StartAtSignIn
+                && settings.StartMinimized == _controller.State.StartMinimized)
         {
             return;
         }
 
         await RunCommandAsync(
-            () => _controller.SetStartAtSignInAsync(settings.StartAtSignIn, _shutdown.Token),
+            () => _controller.SetStartupPreferencesAsync(
+                settings.StartAtSignIn,
+                settings.StartMinimized,
+                _shutdown.Token),
             string.Empty,
             showFailureDialog: true);
     }

@@ -5,8 +5,9 @@ namespace DesktopGuard.App;
 internal sealed class SettingsForm : Form
 {
     private readonly CheckBox _startAtSignInCheckBox;
+    private readonly CheckBox _startMinimizedCheckBox;
 
-    public SettingsForm(bool startAtSignIn)
+    public SettingsForm(bool startAtSignIn, bool startMinimized)
     {
         Text = AppStrings.Settings;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -15,7 +16,7 @@ internal sealed class SettingsForm : Form
         MaximizeBox = false;
         ShowInTaskbar = false;
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(430, 190);
+        ClientSize = new Size(430, 220);
         Padding = new Padding(20);
 
         TableLayoutPanel layout = new()
@@ -41,10 +42,26 @@ internal sealed class SettingsForm : Form
         {
             AutoSize = true,
             Checked = startAtSignIn,
-            Dock = DockStyle.Top,
             Text = AppStrings.StartAtSignIn,
+            Margin = new Padding(0, 4, 0, 8),
+        };
+        _startMinimizedCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Checked = startMinimized,
+            Text = AppStrings.StartMinimized,
             Margin = new Padding(0, 4, 0, 12),
         };
+        FlowLayoutPanel optionsPanel = new()
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            Margin = Padding.Empty,
+            WrapContents = false,
+        };
+        optionsPanel.Controls.Add(_startAtSignInCheckBox);
+        optionsPanel.Controls.Add(_startMinimizedCheckBox);
         FlowLayoutPanel buttonPanel = new()
         {
             AutoSize = true,
@@ -70,7 +87,7 @@ internal sealed class SettingsForm : Form
         buttonPanel.Controls.Add(cancelButton);
 
         layout.Controls.Add(descriptionLabel, 0, 0);
-        layout.Controls.Add(_startAtSignInCheckBox, 0, 1);
+        layout.Controls.Add(optionsPanel, 0, 1);
         layout.Controls.Add(buttonPanel, 0, 2);
         Controls.Add(layout);
         AcceptButton = saveButton;
@@ -79,4 +96,6 @@ internal sealed class SettingsForm : Form
     }
 
     public bool StartAtSignIn => _startAtSignInCheckBox.Checked;
+
+    public bool StartMinimized => _startMinimizedCheckBox.Checked;
 }

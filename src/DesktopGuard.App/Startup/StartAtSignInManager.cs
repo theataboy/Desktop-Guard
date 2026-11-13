@@ -7,7 +7,7 @@ internal sealed class StartAtSignInManager : IStartAtSignInManager
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ValueName = "DesktopGuard";
 
-    public void SetEnabled(bool enabled)
+    public void SetEnabled(bool enabled, bool startMinimized)
     {
         using RegistryKey? runKey = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true)
             ?? (enabled ? Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true) : null);
@@ -29,6 +29,7 @@ internal sealed class StartAtSignInManager : IStartAtSignInManager
             throw new InvalidOperationException("The application executable path is unavailable.");
         }
 
-        runKey.SetValue(ValueName, $"\"{executablePath}\" --background", RegistryValueKind.String);
+        string backgroundArgument = startMinimized ? " --background" : string.Empty;
+        runKey.SetValue(ValueName, $"\"{executablePath}\"{backgroundArgument}", RegistryValueKind.String);
     }
 }

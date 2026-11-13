@@ -164,7 +164,7 @@ internal sealed class DesktopGuardController
 
         try
         {
-            _startAtSignInManager.SetEnabled(_state.StartAtSignIn);
+            _startAtSignInManager.SetEnabled(_state.StartAtSignIn, _state.StartMinimized);
         }
         catch (Exception exception) when (IsExpectedStartupException(exception))
         {
@@ -250,13 +250,18 @@ internal sealed class DesktopGuardController
         StateChanged?.Invoke();
     }
 
-    public async Task SetStartAtSignInAsync(bool enabled, CancellationToken cancellationToken)
+    public async Task SetStartupPreferencesAsync(
+        bool startAtSignIn,
+        bool startMinimized,
+        CancellationToken cancellationToken)
     {
         await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _startAtSignInManager.SetEnabled(enabled);
-            DesktopGuardState updated = ShortcutStateTransitions.SetStartAtSignIn(_state, enabled);
+            DesktopGuardState updated = ShortcutStateTransitions.SetStartMinimized(
+                ShortcutStateTransitions.SetStartAtSignIn(_state, startAtSignIn),
+                startMinimized);
+            _startAtSignInManager.SetEnabled(updated.StartAtSignIn, updated.StartMinimized);
             _stateStore.Save(updated);
             _state = updated;
             _startupFailure = null;
@@ -267,7 +272,7 @@ internal sealed class DesktopGuardController
             _lastFailure = exception;
             try
             {
-                _startAtSignInManager.SetEnabled(_state.StartAtSignIn);
+                _startAtSignInManager.SetEnabled(_state.StartAtSignIn, _state.StartMinimized);
             }
             catch (Exception rollbackException) when (IsExpectedStartupException(rollbackException))
             {

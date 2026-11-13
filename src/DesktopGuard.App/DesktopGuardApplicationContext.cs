@@ -20,6 +20,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _addDesktopShortcutMenuItem;
     private DesktopMonitor? _monitor;
     private bool _isExiting;
+    private bool _mainFormCloseRequested;
 
     public DesktopGuardApplicationContext(
         DesktopGuardController controller,
@@ -99,21 +100,14 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         };
         _trayIcon.DoubleClick += (_, _) => ShowMainForm();
 
-        if (startInBackground)
-        {
-            _ = _mainForm.Handle;
-        }
-        else
-        {
-            _mainForm.Show();
-        }
+        _ = _mainForm.Handle;
 
         if (!_notifications.TryRegister(out _))
         {
             _mainForm.SetNotificationUnavailable();
         }
 
-        _mainForm.BeginInvoke(new Action(async () => await InitializeAsync(rootProvider)));
+        _mainForm.BeginInvoke(new Action(async () => await InitializeAsync(rootProvider, startInBackground)));
     }
 
     protected override void ExitThreadCore()
@@ -135,7 +129,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         _trayIcon.Dispose();
         _trayMenu.Dispose();
 
-        if (!_mainForm.IsDisposed)
+        if (!_mainForm.IsDisposed && !_mainFormCloseRequested)
         {
             _mainForm.Close();
         }
@@ -143,7 +137,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         base.ExitThreadCore();
     }
 
-    private async Task InitializeAsync(IDesktopRootProvider rootProvider)
+    private async Task InitializeAsync(IDesktopRootProvider rootProvider, bool startInBackground)
     {
         try
         {
@@ -157,6 +151,10 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
             _mainForm.SetReady();
             _startAtSignInMenuItem.Enabled = true;
             UpdateTraySettings();
+            if (!_controller.State.StartMinimized)
+            {
+                _mainForm.Show();
+            }
         }
         catch (Exception exception)
         {
@@ -170,8 +168,9 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
                 : AppStrings.InitializationFailure;
             _mainForm.SetUnavailable(failureMessage);
             _startAtSignInMenuItem.Enabled = false;
-            if (_mainForm.Visible)
+            if (!startInBackground)
             {
+                _mainForm.Show();
                 MessageBox.Show(
                     _mainForm,
                     failureMessage,
@@ -187,7 +186,10 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         bool enabled = _startAtSignInMenuItem.Checked;
         try
         {
-            await _controller.SetStartAtSignInAsync(enabled, CancellationToken.None);
+            await _controller.SetStartupPreferencesAsync(
+                enabled,
+                _controller.State.StartMinimized,
+                CancellationToken.None);
         }
         catch (Exception)
         {
@@ -205,6 +207,13 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
     {
         if (_isExiting)
         {
+            _mainFormCloseRequested = true;
+            return;
+        }
+
+        if (e.CloseReason != CloseReason.UserClosing)
+        {
+            _mainFormCloseRequested = true;
             return;
         }
 

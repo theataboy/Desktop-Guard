@@ -310,6 +310,12 @@ public static class ShortcutStateTransitions
         return state with { StartAtSignIn = enabled };
     }
 
+    public static DesktopGuardState SetStartMinimized(DesktopGuardState state, bool enabled)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return state with { StartMinimized = enabled };
+    }
+
     private static TrackedShortcut Find(DesktopGuardState state, Guid shortcutId)
     {
         ArgumentNullException.ThrowIfNull(state);

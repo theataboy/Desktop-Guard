@@ -512,7 +512,7 @@ public sealed class DesktopGuardControllerTests
 
     private sealed class NoOpStartAtSignInManager : IStartAtSignInManager
     {
-        public void SetEnabled(bool enabled)
+        public void SetEnabled(bool enabled, bool startMinimized)
         {
         }
     }

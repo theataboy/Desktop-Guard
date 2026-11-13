@@ -28,6 +28,8 @@ internal static class AppStrings
 
     public static string StartAtSignIn => GetRequiredString(nameof(StartAtSignIn));
 
+    public static string StartMinimized => GetRequiredString(nameof(StartMinimized));
+
     public static string More => GetRequiredString(nameof(More));
 
     public static string Settings => GetRequiredString(nameof(Settings));

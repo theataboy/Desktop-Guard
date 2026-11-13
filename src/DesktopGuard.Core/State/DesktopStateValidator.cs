@@ -28,6 +28,11 @@ public static class DesktopStateValidator
         return IsValidForVersion(state, 2, legacyVersionOne: false, allowCreating: false);
     }
 
+    public static bool IsValidVersionThree(DesktopGuardState state)
+    {
+        return IsValidForVersion(state, 3, legacyVersionOne: false, allowCreating: true);
+    }
+
     private static bool IsValidForVersion(
         DesktopGuardState state,
         int schemaVersion,

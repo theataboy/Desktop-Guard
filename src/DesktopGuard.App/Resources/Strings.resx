@@ -42,6 +42,9 @@
   <data name="StartAtSignIn" xml:space="preserve">
     <value>Start at sign-in</value>
   </data>
+  <data name="StartMinimized" xml:space="preserve">
+    <value>Start minimized</value>
+  </data>
   <data name="More" xml:space="preserve">
     <value>More</value>
   </data>
@@ -49,7 +52,7 @@
     <value>Settings</value>
   </data>
   <data name="SettingsDescription" xml:space="preserve">
-    <value>Choose whether Desktop Guard starts automatically when you sign in.</value>
+    <value>Choose whether Desktop Guard starts automatically when you sign in and whether it opens minimized to the notification area.</value>
   </data>
   <data name="Save" xml:space="preserve">
     <value>Save</value>

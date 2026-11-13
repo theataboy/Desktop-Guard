@@ -14,16 +14,16 @@ Desktop Guard (DG) is a Windows 11 system-tray app that watches desktop shortcut
 - Shortcuts can be moved between the user and Public desktops. Moving to Public requires confirmation because the link becomes visible to all users; moving from Public to the user Desktop leaves it pending review.
 - Other new files are recorded locally without being opened or changed.
 - File-system notifications trigger coalesced full scans, with another full scan every 30 seconds. Windows notifications are a convenience; the list is the source of truth.
-- The main window and tray menu can open the recovery folder. Closing the window hides DG to the tray; the tray menu controls start-at-sign-in and exits DG.
+- The main window and tray menu can open the recovery folder. Closing the window hides DG to the tray; the tray menu controls start-at-sign-in and exits DG. Starting minimized is enabled by default, so launching DG opens only its tray icon until you choose **Open Desktop Guard**.
 - The main window and tray menu can add a **Desktop Guard** shortcut to the signed-in user's Desktop after complete scans of both desktops. DG won't create another while a same-named DG shortcut is tracked on either desktop or parked in recovery. The shortcut is approved automatically because the user explicitly requested it.
-- Start at sign-in is enabled by default and can be turned off under **More > Settings** or from the tray menu.
+- Start at sign-in is enabled by default and can be turned off under **More > Settings** or from the tray menu. Starting minimized is also enabled by default; turn it off in **More > Settings** to show the main window when DG starts.
 - DG never blocks other shortcut creation, executes or resolves a shortcut, automatically parks a file, or overwrites a destination. Parking, restore, and desktop move actions may request UAC after Access Denied; adding the DG shortcut does not request UAC. File locks do not trigger UAC or automatic retries.
 
 All v1 application text is English. User state, the bounded event log, and recovery files live under `%LOCALAPPDATA%\DesktopGuard`. The event log stores only file names, paths, and timestamps; entries older than 90 days are removed.
 
 ## Using Desktop Guard
 
-1. Run `DesktopGuard.App.exe`. DG appears in the Windows notification area. Start at sign-in is enabled by default; change it under **More > Settings** or from the tray menu.
+1. Run `DesktopGuard.App.exe`. DG starts in the Windows notification area by default without opening its main window. Start at sign-in is enabled by default. Open DG from the tray icon. Change start-at-sign-in or start-minimized under **More > Settings**; start-at-sign-in is also available from the tray menu.
 2. Open DG from its tray icon. After a complete scan, existing shortcuts are listed as **Approved and visible**. New `.lnk` and `.url` files on either desktop are listed as **Pending review** and stay where they are. Search by name, filter the list by status, or sort by clicking the **Name**, **Location**, or **Status** column. Clicking a Windows notification opens DG and selects that shortcut; the list remains available if Windows suppresses notifications.
 3. Select a pending shortcut and choose **Approve** to leave it visible, or **Park** to move it into DG's recovery folder. Select an approved shortcut and choose **Park** to move it. Select a parked shortcut and choose **Restore** to return it to its original desktop path. Available actions appear below the list.
 4. Use **Move to user Desktop** or **Move to Public Desktop** to move a selected link between desktops. DG asks for confirmation before moving a link to Public because it becomes visible to everyone using the PC. Scanning and approval do not request elevation. If an explicit file operation receives Access Denied, Windows may show a permission prompt for that operation.

@@ -19,6 +19,7 @@ public sealed class DesktopGuardStateStoreTests
 
         Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, state.SchemaVersion);
         Assert.IsTrue(state.StartAtSignIn);
+        Assert.IsTrue(state.StartMinimized);
         Assert.IsEmpty(state.Roots);
         Assert.IsEmpty(state.Shortcuts);
         Assert.IsEmpty(state.Events);
@@ -75,6 +76,7 @@ public sealed class DesktopGuardStateStoreTests
         DesktopGuardState migrated = store.Load();
 
         Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.IsTrue(migrated.StartMinimized);
         Assert.AreEqual(publicBaselinePath, migrated.Roots.Single(root => root.RootKind == DesktopRootKind.Public).KnownPaths.Single());
         Assert.AreEqual(recoveryFolderId, migrated.Shortcuts.Single().OperationId);
         Assert.AreEqual(ShortcutOperation.Parking, migrated.Shortcuts.Single().Operation);
@@ -118,9 +120,33 @@ public sealed class DesktopGuardStateStoreTests
 
         Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
         Assert.IsFalse(migrated.StartAtSignIn);
+        Assert.IsTrue(migrated.StartMinimized);
         Assert.AreEqual(userPath, migrated.Roots.Single(root => root.RootKind == DesktopRootKind.User).KnownPaths.Single());
         Assert.AreEqual(publicPath, migrated.Roots.Single(root => root.RootKind == DesktopRootKind.Public).KnownPaths.Single());
         Assert.AreEqual(ShortcutStatus.Pending, migrated.Shortcuts.Single().Status);
+    }
+
+    [TestMethod]
+    public void Load_VersionThreeStateEnablesStartMinimizedWithoutChangingExistingPreferences()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        const string versionThreeState = """
+            {
+              "SchemaVersion": 3,
+              "StartAtSignIn": false,
+              "Roots": [],
+              "Shortcuts": [],
+              "Events": []
+            }
+            """;
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), versionThreeState);
+        DesktopGuardStateStore store = new(temporaryDirectory.Path);
+
+        DesktopGuardState migrated = store.Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.IsFalse(migrated.StartAtSignIn);
+        Assert.IsTrue(migrated.StartMinimized);
     }
 
     [TestMethod]

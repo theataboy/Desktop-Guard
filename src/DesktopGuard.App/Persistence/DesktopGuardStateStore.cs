@@ -96,6 +96,7 @@ internal sealed class DesktopGuardStateStore : IDesktopGuardStateStore
                 return state with
                 {
                     SchemaVersion = DesktopGuardState.CurrentSchemaVersion,
+                    StartMinimized = true,
                     Shortcuts = state.Shortcuts
                         .Select(shortcut => shortcut.Operation == DesktopGuard.Core.Shortcuts.ShortcutOperation.None
                             ? shortcut
@@ -106,7 +107,20 @@ internal sealed class DesktopGuardStateStore : IDesktopGuardStateStore
 
             if (schemaVersion == 2 && DesktopStateValidator.IsValidVersionTwo(state))
             {
-                return state with { SchemaVersion = DesktopGuardState.CurrentSchemaVersion };
+                return state with
+                {
+                    SchemaVersion = DesktopGuardState.CurrentSchemaVersion,
+                    StartMinimized = true,
+                };
+            }
+
+            if (schemaVersion == 3 && DesktopStateValidator.IsValidVersionThree(state))
+            {
+                return state with
+                {
+                    SchemaVersion = DesktopGuardState.CurrentSchemaVersion,
+                    StartMinimized = true,
+                };
             }
 
             if (schemaVersion != DesktopGuardState.CurrentSchemaVersion || !DesktopStateValidator.IsValid(state))
