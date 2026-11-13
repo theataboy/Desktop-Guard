@@ -52,7 +52,7 @@
 - `src/DesktopGuard.Core`: desktop inventory policy, shortcut state transitions, reconciliation, and state validation.
 - `src/DesktopGuard.App`: `Application` orchestration; `DesktopScanning` scanner and bounded monitor; `Notifications`; `Persistence`; `ShortcutManagement`; `Startup`; WinForms entry point, main window, tray context, and `Resources`.
 - `tests/DesktopGuard.Tests`: platform-independent scanning policy, reconciliation, validation, and shortcut transition tests.
-- `tests/DesktopGuard.App.Tests`: Windows scanning, persistence, and file-operation tests. File operations use temporary directories, never actual Desktop folders.
+- `tests/DesktopGuard.App.Tests`: Windows scanning and monitoring, notification activation, persistence, and file-operation tests. File operations use temporary directories, never actual Desktop folders.
 - `README.md`: v1 product behavior, usage instructions, and common commands; `SECURITY.md`: threat model and security requirements; `AGENTS.md`: durable coding and repository rules.
 
 This map is an ownership guide, not a requirement to create empty folders in advance. Add feature folders when implementation gives them a clear purpose, and update this map if a deliberate architecture change alters project ownership or dependencies.

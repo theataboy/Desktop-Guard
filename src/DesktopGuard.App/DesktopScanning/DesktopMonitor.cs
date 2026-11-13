@@ -237,7 +237,7 @@ internal sealed class DesktopMonitor : IDisposable
         RequestScan();
     }
 
-    private void OnWatcherError(object sender, ErrorEventArgs args)
+    internal void OnWatcherError(object sender, ErrorEventArgs args)
     {
         Interlocked.Exchange(ref _watchersNeedRefresh, 1);
         RequestScan();

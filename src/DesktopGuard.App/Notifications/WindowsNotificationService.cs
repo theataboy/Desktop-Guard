@@ -120,16 +120,7 @@ internal sealed class WindowsNotificationService : IDisposable
 
     private void OnNotificationInvoked(AppNotificationManager sender, AppNotificationActivatedEventArgs args)
     {
-        Guid? shortcutId = null;
-        if (args.Arguments.Count == 1
-            && args.Arguments.TryGetValue("shortcutId", out string? value)
-            && Guid.TryParseExact(value, "N", out Guid parsed)
-            && parsed != Guid.Empty)
-        {
-            shortcutId = parsed;
-        }
-
-        NotificationActivated?.Invoke(shortcutId);
+        NotificationActivated?.Invoke(NotificationActivation.ParseShortcutId(args.Arguments));
     }
 
     private static string SanitizeName(string name)

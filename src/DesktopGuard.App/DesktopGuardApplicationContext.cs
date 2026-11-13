@@ -231,7 +231,9 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         {
             _mainForm.BeginInvoke(new Action(() =>
             {
-                Guid? validShortcutId = shortcutId is Guid id && _controller.ContainsShortcut(id) ? id : null;
+                Guid? validShortcutId = NotificationActivation.ResolveCurrentShortcutId(
+                    shortcutId,
+                    _controller.ContainsShortcut);
                 _mainForm.ShowAndSelectShortcut(validShortcutId);
             }));
         }

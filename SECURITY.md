@@ -47,7 +47,7 @@ Treat all of these inputs as untrusted, including data read back from DG's own f
 - Publish the app as a self-contained compressed single-file executable. The configured self-extraction places bundled files under the current user's `%TEMP%\.net` directory before startup. Keep the default per-user extraction location; never redirect it to a shared writable directory. Keep the main process unelevated and validate extraction, same-user UAC, and over-the-shoulder UAC behavior on Windows 11 before release.
 - Review security-related .NET analyzer diagnostics. Do not suppress one without recording why and what compensating control is used.
 - Before a release, restore with `--locked-mode`, run `dotnet package list --vulnerable --include-transitive`, and review every finding. Unresolved high or critical advisories block release unless a documented mitigation makes the affected code unreachable.
-- Automated security regression coverage is not complete until tests validate invalid or unknown notification activation IDs and watcher event floods or errors that require a full rescan. Keep these gaps explicit until those tests exist.
+- Automated security regression tests reject invalid and unknown notification activation IDs and verify that coalesced scan-request floods and simulated watcher errors trigger a full rescan. Actual Windows watcher overflow behavior remains a manual release check.
 - Automated file-operation tests must use temporary directories. Manually validate tray lifecycle, sign-in registration, Windows notification display and activation, watcher-error recovery, same-user and over-the-shoulder UAC, UAC cancellation/policy denial, ACL inheritance, recovery, lock handling, and failure handling on Windows 11 before release.
 
 ## References
