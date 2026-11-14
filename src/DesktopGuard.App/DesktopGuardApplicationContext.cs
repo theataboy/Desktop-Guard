@@ -27,6 +27,16 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         IDesktopRootProvider rootProvider,
         WindowsNotificationService notifications,
         bool startInBackground)
+        : this(controller, rootProvider, notifications, startInBackground, enableShellIntegration: true)
+    {
+    }
+
+    internal DesktopGuardApplicationContext(
+        DesktopGuardController controller,
+        IDesktopRootProvider rootProvider,
+        WindowsNotificationService notifications,
+        bool startInBackground,
+        bool enableShellIntegration)
     {
         ArgumentNullException.ThrowIfNull(controller);
         ArgumentNullException.ThrowIfNull(rootProvider);
@@ -36,7 +46,6 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         _mainForm = new MainForm(controller);
         _mainForm.ThemeChanged += OnThemeChanged;
         _mainForm.CommandAvailabilityChanged += UpdateTraySettings;
-        MainForm = _mainForm;
         _mainForm.FormClosing += OnMainFormClosing;
         _mainForm.Resize += OnMainFormResize;
         _notifications.NotificationActivated += OnNotificationActivated;
@@ -96,18 +105,24 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
             ContextMenuStrip = _trayMenu,
             Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath) ?? SystemIcons.Application,
             Text = AppStrings.ApplicationTitle,
-            Visible = true,
+            Visible = enableShellIntegration,
         };
         _trayIcon.DoubleClick += (_, _) => ShowMainForm();
 
         _ = _mainForm.Handle;
 
-        if (!_notifications.TryRegister(out _))
+        if (enableShellIntegration && !_notifications.TryRegister(out _))
         {
             _mainForm.SetNotificationUnavailable();
         }
 
-        _mainForm.BeginInvoke(new Action(async () => await InitializeAsync(rootProvider, startInBackground)));
+        _mainForm.BeginInvoke(new Action(async () =>
+        {
+            // Application.Run(context) shows MainForm immediately when the loop starts.
+            // Attach it only after that first visibility decision has already passed.
+            MainForm = _mainForm;
+            await InitializeAsync(rootProvider, startInBackground);
+        }));
     }
 
     protected override void ExitThreadCore()
@@ -151,7 +166,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
             _mainForm.SetReady();
             _startAtSignInMenuItem.Enabled = true;
             UpdateTraySettings();
-            if (!_controller.State.StartMinimized)
+            if (ShouldShowMainForm(startInBackground, _controller.State.StartMinimized))
             {
                 _mainForm.Show();
             }
@@ -201,6 +216,11 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
     private void ShowMainForm()
     {
         _mainForm.ShowAndSelectShortcut(shortcutId: null);
+    }
+
+    internal static bool ShouldShowMainForm(bool startInBackground, bool startMinimized)
+    {
+        return !startInBackground && !startMinimized;
     }
 
     private void OnMainFormClosing(object? sender, FormClosingEventArgs e)
