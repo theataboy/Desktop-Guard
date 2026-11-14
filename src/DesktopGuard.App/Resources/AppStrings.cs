@@ -12,11 +12,15 @@ internal static class AppStrings
 
     public static string ScanNow => GetRequiredString(nameof(ScanNow));
 
+    public static string ScanNowButton => GetRequiredString(nameof(ScanNowButton));
+
     public static string MoveToUserDesktop => GetRequiredString(nameof(MoveToUserDesktop));
 
     public static string MoveToPublicDesktop => GetRequiredString(nameof(MoveToPublicDesktop));
 
     public static string AddDesktopShortcut => GetRequiredString(nameof(AddDesktopShortcut));
+
+    public static string AddDesktopShortcutButton => GetRequiredString(nameof(AddDesktopShortcutButton));
 
     public static string AddingDesktopShortcut => GetRequiredString(nameof(AddingDesktopShortcut));
 
@@ -33,6 +37,8 @@ internal static class AppStrings
     public static string More => GetRequiredString(nameof(More));
 
     public static string Settings => GetRequiredString(nameof(Settings));
+
+    public static string SettingsMenuItem => GetRequiredString(nameof(SettingsMenuItem));
 
     public static string SettingsDescription => GetRequiredString(nameof(SettingsDescription));
 
@@ -97,6 +103,8 @@ internal static class AppStrings
     public static string OpenDesktopGuard => GetRequiredString(nameof(OpenDesktopGuard));
 
     public static string OpenRecoveryFolder => GetRequiredString(nameof(OpenRecoveryFolder));
+
+    public static string OpenRecoveryFolderMenuItem => GetRequiredString(nameof(OpenRecoveryFolderMenuItem));
 
     public static string Exit => GetRequiredString(nameof(Exit));
 

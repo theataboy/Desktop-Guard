@@ -44,11 +44,11 @@ internal partial class MainForm : Form
         titleLabel.Text = AppStrings.ApplicationTitle;
         Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath)
             ?? SystemIcons.Application;
-        scanButton.Text = AppStrings.ScanNow;
-        addDesktopShortcutButton.Text = AppStrings.AddDesktopShortcut;
+        scanButton.Text = AppStrings.ScanNowButton;
+        addDesktopShortcutButton.Text = AppStrings.AddDesktopShortcutButton;
         moreButton.Text = AppStrings.More;
-        openRecoveryFolderMenuItem.Text = AppStrings.OpenRecoveryFolder;
-        settingsMenuItem.Text = AppStrings.Settings;
+        openRecoveryFolderMenuItem.Text = AppStrings.OpenRecoveryFolderMenuItem;
+        settingsMenuItem.Text = AppStrings.SettingsMenuItem;
         allFilterButton.Text = AppStrings.AllFilterFormat(0);
         needsReviewFilterButton.Text = AppStrings.NeedsReviewFilterFormat(0);
         approvedFilterButton.Text = AppStrings.ApprovedFilterFormat(0);
@@ -1035,21 +1035,48 @@ internal partial class MainForm : Form
             : AppStrings.OperationFailure;
     }
 
-    private void MainForm_KeyDown(object? sender, KeyEventArgs e)
+    private async void MainForm_KeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.KeyCode != Keys.F12 || e.Modifiers != (Keys.Control | Keys.Shift | Keys.Alt))
+        if (e.KeyCode == Keys.F12 && e.Modifiers == (Keys.Control | Keys.Shift | Keys.Alt))
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            MessageBox.Show(
+                this,
+                EmbeddedContent.Read(),
+                AppStrings.ApplicationTitle,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        if (e.KeyCode == Keys.F && e.Modifiers == Keys.Control)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            searchTextBox.Focus();
+            searchTextBox.SelectAll();
+            return;
+        }
+
+        if (e.Modifiers != Keys.None || !entriesGrid.ContainsFocus)
         {
             return;
         }
 
-        e.Handled = true;
-        e.SuppressKeyPress = true;
-        MessageBox.Show(
-            this,
-            EmbeddedContent.Read(),
-            AppStrings.ApplicationTitle,
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
+        switch (e.KeyCode)
+        {
+            case Keys.F2 when _renameShortcutMenuItem.Enabled && !_isBusy:
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                await RenameSelectedAsync();
+                break;
+            case Keys.Delete when _deleteShortcutMenuItem.Enabled && !_isBusy:
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                await DeleteSelectedAsync();
+                break;
+        }
     }
 
     private void AddRuntimeWarning(string warning)

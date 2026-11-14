@@ -18,14 +18,20 @@
   <data name="ScanNow" xml:space="preserve">
     <value>Scan now</value>
   </data>
+  <data name="ScanNowButton" xml:space="preserve">
+    <value>&amp;Scan now</value>
+  </data>
   <data name="MoveToUserDesktop" xml:space="preserve">
-    <value>Move to user Desktop</value>
+    <value>Move to &amp;user Desktop</value>
   </data>
   <data name="MoveToPublicDesktop" xml:space="preserve">
-    <value>Move to Public Desktop</value>
+    <value>Move to Pu&amp;blic Desktop</value>
   </data>
   <data name="AddDesktopShortcut" xml:space="preserve">
     <value>Add Desktop Guard shortcut</value>
+  </data>
+  <data name="AddDesktopShortcutButton" xml:space="preserve">
+    <value>Add Desktop Guard short&amp;cut</value>
   </data>
   <data name="AddingDesktopShortcut" xml:space="preserve">
     <value>Adding Desktop Guard shortcut...</value>
@@ -34,7 +40,7 @@
     <value>Creating shortcut</value>
   </data>
   <data name="RetryOperation" xml:space="preserve">
-    <value>Retry operation</value>
+    <value>Retr&amp;y operation</value>
   </data>
   <data name="PublicVisibilityConfirmation" xml:space="preserve">
     <value>This shortcut will be visible to everyone who uses this PC. Move it to the Public Desktop?</value>
@@ -46,10 +52,13 @@
     <value>Start minimized</value>
   </data>
   <data name="More" xml:space="preserve">
-    <value>More</value>
+    <value>&amp;More</value>
   </data>
   <data name="Settings" xml:space="preserve">
     <value>Settings</value>
+  </data>
+  <data name="SettingsMenuItem" xml:space="preserve">
+    <value>S&amp;ettings</value>
   </data>
   <data name="SettingsDescription" xml:space="preserve">
     <value>Choose whether Desktop Guard starts automatically when you sign in and whether it opens minimized to the notification area.</value>
@@ -67,22 +76,22 @@
     <value>Select a shortcut to see available actions.</value>
   </data>
   <data name="Approve" xml:space="preserve">
-    <value>Approve</value>
+    <value>&amp;Approve</value>
   </data>
   <data name="Rename" xml:space="preserve">
-    <value>Rename</value>
+    <value>&amp;Rename</value>
   </data>
   <data name="Delete" xml:space="preserve">
-    <value>Delete</value>
+    <value>&amp;Delete</value>
   </data>
   <data name="Properties" xml:space="preserve">
-    <value>Properties</value>
+    <value>&amp;Properties</value>
   </data>
   <data name="MakeVisible" xml:space="preserve">
-    <value>Make visible</value>
+    <value>Make &amp;visible</value>
   </data>
   <data name="MoreShortcutActions" xml:space="preserve">
-    <value>More shortcut actions</value>
+    <value>More s&amp;hortcut actions</value>
   </data>
   <data name="RenameShortcutTitle" xml:space="preserve">
     <value>Rename shortcut</value>
@@ -115,25 +124,25 @@
     <value>Delete {0} permanently from Recovery? This cannot be undone.</value>
   </data>
   <data name="Park" xml:space="preserve">
-    <value>Park</value>
+    <value>Par&amp;k</value>
   </data>
   <data name="Restore" xml:space="preserve">
-    <value>Restore</value>
+    <value>Res&amp;tore</value>
   </data>
   <data name="AllFilterFormat" xml:space="preserve">
-    <value>All ({0})</value>
+    <value>A&amp;ll ({0})</value>
   </data>
   <data name="NeedsReviewFilterFormat" xml:space="preserve">
-    <value>Needs review ({0})</value>
+    <value>&amp;Needs review ({0})</value>
   </data>
   <data name="ApprovedFilterFormat" xml:space="preserve">
-    <value>Approved ({0})</value>
+    <value>Appr&amp;oved ({0})</value>
   </data>
   <data name="RecoveryFilterFormat" xml:space="preserve">
-    <value>Recovery ({0})</value>
+    <value>&amp;Recovery ({0})</value>
   </data>
   <data name="IssuesCountFormat" xml:space="preserve">
-    <value>Issues ({0})</value>
+    <value>&amp;Issues ({0})</value>
   </data>
   <data name="SelectedShortcutFormat" xml:space="preserve">
     <value>{0} | {1}</value>
@@ -143,6 +152,9 @@
   </data>
   <data name="OpenRecoveryFolder" xml:space="preserve">
     <value>Open recovery folder</value>
+  </data>
+  <data name="OpenRecoveryFolderMenuItem" xml:space="preserve">
+    <value>Open recovery &amp;folder</value>
   </data>
   <data name="Exit" xml:space="preserve">
     <value>Exit</value>
