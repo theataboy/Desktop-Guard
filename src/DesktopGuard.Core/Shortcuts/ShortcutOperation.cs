@@ -7,4 +7,7 @@ public enum ShortcutOperation
     Restoring,
     Moving,
     Creating,
+    Renaming,
+    DeletingToRecycleBin,
+    DeletingPermanently,
 }

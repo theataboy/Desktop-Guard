@@ -101,6 +101,7 @@ public static class ShortcutStateTransitions
             Operation = ShortcutOperation.None,
             OperationId = null,
             OperationContentHash = null,
+            IsHidden = false,
         });
     }
 
@@ -124,6 +125,152 @@ public static class ShortcutStateTransitions
         }
 
         return Replace(state, shortcut with { Status = ShortcutStatus.ApprovedVisible });
+    }
+
+    public static DesktopGuardState BeginRename(DesktopGuardState state, Guid shortcutId, string targetName)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.None
+            || !IsValidName(targetName)
+            || !string.Equals(Path.GetExtension(shortcut.Name), Path.GetExtension(targetName), StringComparison.OrdinalIgnoreCase)
+            || PathsEqual(shortcut.Name, targetName))
+        {
+            throw new InvalidOperationException("This shortcut cannot be renamed in its current state.");
+        }
+
+        string targetPath = Path.GetFullPath(Path.Combine(shortcut.RootPath, targetName));
+        if (shortcut.Status != ShortcutStatus.Parked && state.Shortcuts.Any(other =>
+                other.Id != shortcutId
+                    && (other.Status != ShortcutStatus.Parked || other.Operation == ShortcutOperation.Restoring)
+                    && PathsEqual(other.OriginalPath, targetPath)))
+        {
+            throw new InvalidOperationException("This shortcut cannot be renamed in its current state.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            Operation = ShortcutOperation.Renaming,
+            OperationId = Guid.NewGuid(),
+            TargetName = targetName,
+        });
+    }
+
+    public static DesktopGuardState CompleteRename(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.Renaming || shortcut.TargetName is null)
+        {
+            throw new InvalidOperationException("No rename operation is in progress for this shortcut.");
+        }
+
+        string targetPath = Path.GetFullPath(Path.Combine(shortcut.RootPath, shortcut.TargetName));
+        List<DesktopRootCheckpoint> roots = shortcut.Status == ShortcutStatus.Parked
+            ? state.Roots
+            : state.Roots
+                .Select(root => root.RootKind == shortcut.RootKind && PathsEqual(root.RootPath, shortcut.RootPath)
+                    ? root with
+                    {
+                        KnownPaths = root.KnownPaths
+                            .Select(path => PathsEqual(path, shortcut.OriginalPath) ? targetPath : path)
+                            .Distinct(GetPathComparer())
+                            .ToArray(),
+                    }
+                    : root)
+                .ToList();
+
+        return Replace(state with { Roots = roots }, shortcut with
+        {
+            Name = shortcut.TargetName,
+            OriginalPath = targetPath,
+            Operation = ShortcutOperation.None,
+            OperationId = null,
+            TargetName = null,
+        });
+    }
+
+    public static DesktopGuardState CancelRename(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.Renaming)
+        {
+            throw new InvalidOperationException("No rename operation is in progress for this shortcut.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            Operation = ShortcutOperation.None,
+            OperationId = null,
+            TargetName = null,
+        });
+    }
+
+    public static DesktopGuardState BeginDelete(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.None)
+        {
+            throw new InvalidOperationException("This shortcut cannot be deleted in its current state.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            Operation = shortcut.Status == ShortcutStatus.Parked
+                ? ShortcutOperation.DeletingPermanently
+                : ShortcutOperation.DeletingToRecycleBin,
+            OperationId = Guid.NewGuid(),
+        });
+    }
+
+    public static DesktopGuardState CompleteDelete(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation is not (ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently))
+        {
+            throw new InvalidOperationException("No delete operation is in progress for this shortcut.");
+        }
+
+        List<DesktopRootCheckpoint> roots = state.Roots;
+        if (shortcut.Operation == ShortcutOperation.DeletingToRecycleBin)
+        {
+            roots = state.Roots
+                .Select(root => root.RootKind == shortcut.RootKind && PathsEqual(root.RootPath, shortcut.RootPath)
+                    ? root with { KnownPaths = root.KnownPaths.Where(path => !PathsEqual(path, shortcut.OriginalPath)).ToArray() }
+                    : root)
+                .ToList();
+        }
+
+        return state with
+        {
+            Roots = roots,
+            Shortcuts = state.Shortcuts.Where(item => item.Id != shortcutId).ToList(),
+        };
+    }
+
+    public static DesktopGuardState CancelDelete(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation is not (ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently))
+        {
+            throw new InvalidOperationException("No delete operation is in progress for this shortcut.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            Operation = ShortcutOperation.None,
+            OperationId = null,
+        });
+    }
+
+    public static DesktopGuardState SetHidden(DesktopGuardState state, Guid shortcutId, bool isHidden)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.None)
+        {
+            throw new InvalidOperationException("This shortcut cannot be updated in its current state.");
+        }
+
+        return Replace(state, shortcut with { IsHidden = isHidden });
     }
 
     public static DesktopGuardState BeginParking(DesktopGuardState state, Guid shortcutId, Guid recoveryFolderId)
@@ -249,6 +396,7 @@ public static class ShortcutStateTransitions
             TargetRootKind = null,
             TargetRootPath = null,
             OperationId = null,
+            IsHidden = false,
         });
     }
 
@@ -286,6 +434,7 @@ public static class ShortcutStateTransitions
             Operation = ShortcutOperation.None,
             RecoveryFolderId = null,
             OperationId = null,
+            IsHidden = false,
         });
     }
 
@@ -321,6 +470,14 @@ public static class ShortcutStateTransitions
         ArgumentNullException.ThrowIfNull(state);
         return state.Shortcuts.FirstOrDefault(shortcut => shortcut.Id == shortcutId)
             ?? throw new KeyNotFoundException("The shortcut is no longer in the current inventory.");
+    }
+
+    private static bool IsValidName(string? name)
+    {
+        return name is not null
+            && DesktopCandidatePolicy.IsValidWindowsFileName(name)
+            && string.Equals(Path.GetFileName(name), name, StringComparison.Ordinal)
+            && DesktopEntryClassifier.Classify(name) == DesktopEntryKind.Shortcut;
     }
 
     private static DesktopGuardState Replace(DesktopGuardState state, TrackedShortcut updatedShortcut)

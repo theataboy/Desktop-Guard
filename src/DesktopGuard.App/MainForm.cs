@@ -18,6 +18,12 @@ internal partial class MainForm : Form
     private readonly CancellationTokenSource _shutdown = new();
     private readonly List<string> _runtimeWarnings = [];
     private readonly ShortcutListPresentation _presentation = new();
+    private Button _shortcutActionsButton = null!;
+    private ContextMenuStrip _shortcutActionsMenu = null!;
+    private ToolStripMenuItem _renameShortcutMenuItem = null!;
+    private ToolStripMenuItem _deleteShortcutMenuItem = null!;
+    private ToolStripMenuItem _propertiesMenuItem = null!;
+    private ToolStripMenuItem _makeVisibleMenuItem = null!;
     private bool _isUpdatingView;
     private bool _isBusy;
     private bool _canManage;
@@ -33,6 +39,7 @@ internal partial class MainForm : Form
         ArgumentNullException.ThrowIfNull(controller);
         _controller = controller;
         InitializeComponent();
+        InitializeShortcutActions();
         Text = AppStrings.ApplicationTitle;
         titleLabel.Text = AppStrings.ApplicationTitle;
         Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath)
@@ -72,6 +79,11 @@ internal partial class MainForm : Form
         moveToUserButton.Click += async (_, _) => await MoveSelectedAsync(DesktopRootKind.User);
         moveToPublicButton.Click += async (_, _) => await MoveSelectedAsync(DesktopRootKind.Public);
         retryOperationButton.Click += async (_, _) => await RetrySelectedOperationAsync();
+        _shortcutActionsButton.Click += (_, _) => ShowShortcutActionsMenu();
+        _renameShortcutMenuItem.Click += async (_, _) => await RenameSelectedAsync();
+        _deleteShortcutMenuItem.Click += async (_, _) => await DeleteSelectedAsync();
+        _propertiesMenuItem.Click += async (_, _) => await OpenPropertiesSelectedAsync();
+        _makeVisibleMenuItem.Click += async (_, _) => await MakeVisibleSelectedAsync();
         allFilterButton.CheckedChanged += (_, _) => FilterButton_CheckedChanged(allFilterButton, ShortcutListFilter.All);
         needsReviewFilterButton.CheckedChanged += (_, _) => FilterButton_CheckedChanged(needsReviewFilterButton, ShortcutListFilter.NeedsReview);
         approvedFilterButton.CheckedChanged += (_, _) => FilterButton_CheckedChanged(approvedFilterButton, ShortcutListFilter.Approved);
@@ -92,6 +104,113 @@ internal partial class MainForm : Form
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         ApplyTheme();
         RefreshView();
+    }
+
+    private void InitializeShortcutActions()
+    {
+        _shortcutActionsButton = new Button
+        {
+            AutoSize = true,
+            Margin = new Padding(0, 0, 6, 4),
+            Name = "shortcutActionsButton",
+            Text = AppStrings.MoreShortcutActions,
+            UseVisualStyleBackColor = true,
+        };
+        _shortcutActionsMenu = new ContextMenuStrip(components);
+        _renameShortcutMenuItem = new ToolStripMenuItem(AppStrings.Rename);
+        _propertiesMenuItem = new ToolStripMenuItem(AppStrings.Properties);
+        _makeVisibleMenuItem = new ToolStripMenuItem(AppStrings.MakeVisible);
+        _deleteShortcutMenuItem = new ToolStripMenuItem(AppStrings.Delete);
+        _shortcutActionsMenu.Items.AddRange([
+            _renameShortcutMenuItem,
+            _propertiesMenuItem,
+            _makeVisibleMenuItem,
+            new ToolStripSeparator(),
+            _deleteShortcutMenuItem,
+        ]);
+        actionPanel.Controls.Add(_shortcutActionsButton);
+    }
+
+    private void ShowShortcutActionsMenu()
+    {
+        if (_shortcutActionsButton.Enabled)
+        {
+            _shortcutActionsMenu.Show(_shortcutActionsButton, new Point(0, _shortcutActionsButton.Height));
+        }
+    }
+
+    private async Task RenameSelectedAsync()
+    {
+        if (GetSelectedEntry()?.Shortcut is not TrackedShortcut shortcut)
+        {
+            return;
+        }
+
+        using RenameShortcutDialog dialog = new(shortcut.Name);
+        if (dialog.ShowDialog(this) != DialogResult.OK
+            || string.Equals(
+                dialog.BaseName,
+                Path.GetFileNameWithoutExtension(shortcut.Name),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            () => _controller.RenameAsync(shortcut.Id, dialog.BaseName, _shutdown.Token),
+            AppStrings.Renaming,
+            showFailureDialog: true);
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (GetSelectedEntry()?.Shortcut is not TrackedShortcut shortcut)
+        {
+            return;
+        }
+
+        if (shortcut.Status == ShortcutStatus.Parked
+            && MessageBox.Show(
+                this,
+                AppStrings.PermanentDeleteConfirmationFormat(shortcut.Name),
+                AppStrings.ApplicationTitle,
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            () => _controller.DeleteAsync(shortcut.Id, _shutdown.Token),
+            shortcut.Status == ShortcutStatus.Parked ? AppStrings.PermanentlyDeleting : AppStrings.MovingToRecycleBin,
+            showFailureDialog: true);
+    }
+
+    private async Task OpenPropertiesSelectedAsync()
+    {
+        if (GetSelectedEntry()?.Shortcut is not TrackedShortcut shortcut)
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            () => _controller.OpenPropertiesAsync(shortcut.Id, _shutdown.Token),
+            AppStrings.OpeningProperties,
+            showFailureDialog: true);
+    }
+
+    private async Task MakeVisibleSelectedAsync()
+    {
+        if (GetSelectedEntry()?.Shortcut is not TrackedShortcut shortcut)
+        {
+            return;
+        }
+
+        await RunCommandAsync(
+            () => _controller.MakeVisibleAsync(shortcut.Id, _shutdown.Token),
+            AppStrings.MakingShortcutVisible,
+            showFailureDialog: true);
     }
 
     public bool CanScanNow => _canManage && !_isBusy;
@@ -321,17 +440,21 @@ internal partial class MainForm : Form
             return;
         }
 
-        string progressMessage = shortcut.Operation == ShortcutOperation.Creating
-            ? AppStrings.AddingDesktopShortcut
-            : shortcut.Operation == ShortcutOperation.Parking
-                ? AppStrings.Parking
-                : shortcut.Operation == ShortcutOperation.Restoring
-                    ? AppStrings.Restoring
-                    : AppStrings.Moving;
+        string progressMessage = shortcut.Operation switch
+        {
+            ShortcutOperation.Creating => AppStrings.AddingDesktopShortcut,
+            ShortcutOperation.Parking => AppStrings.Parking,
+            ShortcutOperation.Restoring => AppStrings.Restoring,
+            ShortcutOperation.Moving => AppStrings.Moving,
+            ShortcutOperation.Renaming => AppStrings.Renaming,
+            ShortcutOperation.DeletingToRecycleBin => AppStrings.MovingToRecycleBin,
+            ShortcutOperation.DeletingPermanently => AppStrings.PermanentlyDeleting,
+            _ => AppStrings.Moving,
+        };
         await RunCommandAsync(
             () => _controller.RetryPendingOperationAsync(shortcut.Id, _shutdown.Token),
             progressMessage,
-            showFailureDialog: shortcut.Operation == ShortcutOperation.Creating);
+            showFailureDialog: true);
     }
 
     private async Task OpenSettingsAsync()
@@ -453,7 +576,10 @@ internal partial class MainForm : Form
             bool selectionRestored = false;
             foreach (ShortcutListPresentationRow item in _presentation.GetVisibleRows())
             {
-                int index = entriesGrid.Rows.Add(item.Entry.Name, item.Location, item.Status);
+                string displayName = item.Entry.IsHidden
+                    ? AppStrings.HiddenNameFormat(item.Entry.Name)
+                    : item.Entry.Name;
+                int index = entriesGrid.Rows.Add(displayName, item.Location, item.Status);
                 DataGridViewRow row = entriesGrid.Rows[index];
                 row.Tag = item;
                 WindowsTheme.ApplyStatusCell(
@@ -515,7 +641,8 @@ internal partial class MainForm : Form
             status,
             needsReview,
             approved,
-            recovery);
+            recovery,
+            entry.IsHidden);
     }
 
     private void UpdateFilterLabels()
@@ -544,6 +671,7 @@ internal partial class MainForm : Form
     {
         WindowsTheme.Apply(this);
         WindowsTheme.Apply(moreMenu);
+        WindowsTheme.Apply(_shortcutActionsMenu);
         UpdateFilterButtonColors();
         foreach (DataGridViewRow row in entriesGrid.Rows)
         {
@@ -578,6 +706,7 @@ internal partial class MainForm : Form
         bool canRetry = _canManage && manageable && shortcut?.Operation != ShortcutOperation.None
             && shortcut is not null
             && _controller.IsOperationUnresolved(shortcut.Id);
+        bool canUseShortcutActions = _canManage && noOperation && shortcut is not null;
 
         SetActionButton(approveButton, canApprove);
         SetActionButton(parkButton, canPark);
@@ -585,6 +714,11 @@ internal partial class MainForm : Form
         SetActionButton(moveToUserButton, canMoveToUser);
         SetActionButton(moveToPublicButton, canMoveToPublic);
         SetActionButton(retryOperationButton, canRetry);
+        SetActionButton(_shortcutActionsButton, canUseShortcutActions);
+        _renameShortcutMenuItem.Enabled = canUseShortcutActions;
+        _deleteShortcutMenuItem.Enabled = canUseShortcutActions;
+        _propertiesMenuItem.Enabled = canUseShortcutActions;
+        _makeVisibleMenuItem.Enabled = canUseShortcutActions && selectedRow?.Entry.IsHidden == true;
 
         if (selectedRow is null)
         {
@@ -829,6 +963,9 @@ internal partial class MainForm : Form
             ShortcutOperation.Restoring => AppStrings.Restoring,
             ShortcutOperation.Moving => AppStrings.Moving,
             ShortcutOperation.Creating => AppStrings.CreatingDesktopShortcut,
+            ShortcutOperation.Renaming => AppStrings.Renaming,
+            ShortcutOperation.DeletingToRecycleBin => AppStrings.MovingToRecycleBin,
+            ShortcutOperation.DeletingPermanently => AppStrings.PermanentlyDeleting,
             _ => shortcut.Status switch
             {
                 ShortcutStatus.Pending => AppStrings.PendingReview,

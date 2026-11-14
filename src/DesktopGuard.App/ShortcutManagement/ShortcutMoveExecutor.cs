@@ -6,16 +6,17 @@ namespace DesktopGuard.App.ShortcutManagement;
 internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
 {
     private readonly IShortcutElevationBroker _elevationBroker;
-    private readonly Action<string, string, Guid, bool> _move;
+    private readonly Action<string, string, Guid, bool, bool> _move;
 
     public ShortcutMoveExecutor(IShortcutElevationBroker elevationBroker)
-        : this(elevationBroker, ShortcutFileTransfer.Move)
+        : this(elevationBroker, (source, destination, operationId, allowExisting, preserveHidden) =>
+            ShortcutFileTransfer.Move(source, destination, operationId, allowExisting, preserveHidden))
     {
     }
 
     internal ShortcutMoveExecutor(
         IShortcutElevationBroker elevationBroker,
-        Action<string, string, Guid, bool> move)
+        Action<string, string, Guid, bool, bool> move)
     {
         ArgumentNullException.ThrowIfNull(elevationBroker);
         ArgumentNullException.ThrowIfNull(move);
@@ -67,7 +68,12 @@ internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            _move(sourcePath, destinationPath, operationId, allowExistingDestination);
+            _move(
+                sourcePath,
+                destinationPath,
+                operationId,
+                allowExistingDestination,
+                elevatedRequest.Kind == ElevatedShortcutOperationKind.ParkToRecovery);
         }
         catch (Exception exception) when (IsAccessDenied(exception))
         {
@@ -93,13 +99,16 @@ internal static class ShortcutFileTransfer
         string sourcePath,
         string destinationPath,
         Guid operationId,
-        bool allowExistingDestination = false)
+        bool allowExistingDestination = false,
+        bool preserveHidden = false)
     {
         if (operationId == Guid.Empty)
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
         }
 
+        ValidateRegularFile(sourcePath);
+        FileAttributes sourceAttributes = File.GetAttributes(sourcePath);
         string operationDirectory = GetOperationDirectory(destinationPath, operationId);
         if (File.Exists(destinationPath))
         {
@@ -107,6 +116,7 @@ internal static class ShortcutFileTransfer
                 && File.Exists(sourcePath)
                 && FilesAreEqual(sourcePath, destinationPath))
             {
+                UpdateHiddenAttribute(destinationPath, sourceAttributes, preserveHidden);
                 File.Delete(sourcePath);
                 DeleteEmptyOperationDirectory(destinationPath, operationId);
                 return;
@@ -114,8 +124,6 @@ internal static class ShortcutFileTransfer
 
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.DestinationConflict);
         }
-
-        ValidateRegularFile(sourcePath);
 
         if (Directory.Exists(operationDirectory))
         {
@@ -138,6 +146,8 @@ internal static class ShortcutFileTransfer
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
         }
+
+        UpdateHiddenAttribute(temporaryPath, sourceAttributes, preserveHidden);
 
         EnsureNoDestinationEntry(destinationPath);
         File.Move(temporaryPath, destinationPath);
@@ -284,6 +294,20 @@ internal static class ShortcutFileTransfer
         return Path.GetFullPath(Path.Combine(directory, $".desktopguard-{operationId:N}"));
     }
 
+    public static void SetHiddenAttribute(string path, bool isHidden)
+    {
+        FileAttributes attributes = File.GetAttributes(path);
+        attributes = isHidden
+            ? attributes | FileAttributes.Hidden
+            : attributes & ~FileAttributes.Hidden;
+        if (attributes == 0)
+        {
+            attributes = FileAttributes.Normal;
+        }
+
+        File.SetAttributes(path, attributes);
+    }
+
     private static void CopyToNewFile(string sourcePath, string temporaryPath)
     {
         try
@@ -356,6 +380,12 @@ internal static class ShortcutFileTransfer
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
         }
+    }
+
+    private static void UpdateHiddenAttribute(string path, FileAttributes sourceAttributes, bool preserveHidden)
+    {
+        bool shouldBeHidden = preserveHidden && (sourceAttributes & FileAttributes.Hidden) != 0;
+        SetHiddenAttribute(path, shouldBeHidden);
     }
 
     private static void DeleteEmptyOperationDirectory(string destinationPath, Guid operationId)

@@ -23,7 +23,8 @@ internal sealed record ShortcutListPresentationRow(
     string Status,
     bool NeedsReview,
     bool Approved,
-    bool Recovery);
+    bool Recovery,
+    bool IsHidden = false);
 
 internal sealed class ShortcutListPresentation
 {

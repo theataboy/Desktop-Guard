@@ -141,6 +141,129 @@ public sealed class ShortcutStateTransitionsTests
     }
 
     [TestMethod]
+    public void Rename_PreservesExtensionAndUpdatesDesktopCheckpoint()
+    {
+        DesktopGuardState initial = StateWithShortcut(ShortcutStatus.ApprovedVisible);
+        TrackedShortcut original = initial.Shortcuts.Single() with { IsHidden = true };
+        initial = initial with { Shortcuts = [original] };
+
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(initial, original.Id, "Renamed.lnk");
+        Assert.IsTrue(DesktopStateValidator.IsValid(renaming));
+
+        DesktopGuardState renamed = ShortcutStateTransitions.CompleteRename(renaming, original.Id);
+        TrackedShortcut result = renamed.Shortcuts.Single();
+        string expectedPath = Path.Combine(original.RootPath, "Renamed.lnk");
+        Assert.AreEqual("Renamed.lnk", result.Name);
+        Assert.AreEqual(expectedPath, result.OriginalPath);
+        Assert.IsTrue(result.IsHidden);
+        CollectionAssert.AreEqual(
+            new[] { expectedPath },
+            renamed.Roots.Single().KnownPaths.ToArray());
+        Assert.IsTrue(DesktopStateValidator.IsValid(renamed));
+    }
+
+    [TestMethod]
+    public void Rename_ParkedShortcutDoesNotRewriteReplacementPathInDesktopCheckpoint()
+    {
+        TrackedShortcut parked = CreateShortcut(DesktopRootKind.User) with
+        {
+            Status = ShortcutStatus.Parked,
+            StatusBeforeParking = ShortcutStatus.ApprovedVisible,
+            RecoveryFolderId = Guid.NewGuid(),
+        };
+        TrackedShortcut replacement = parked with
+        {
+            Id = Guid.NewGuid(),
+            Status = ShortcutStatus.Pending,
+            StatusBeforeParking = null,
+            RecoveryFolderId = null,
+        };
+        DesktopGuardState initial = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(
+                    DesktopRootKind.User,
+                    parked.RootPath,
+                    IsBaselined: true,
+                    KnownPaths: [parked.OriginalPath]),
+            ],
+            Shortcuts = [parked, replacement],
+        };
+
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(initial, parked.Id, "Parked copy.lnk");
+
+        Assert.IsTrue(DesktopStateValidator.IsValid(renaming));
+        DesktopGuardState renamed = ShortcutStateTransitions.CompleteRename(renaming, parked.Id);
+        Assert.AreEqual(parked.OriginalPath, renamed.Roots.Single().KnownPaths.Single());
+        Assert.AreEqual("Parked copy.lnk", renamed.Shortcuts.Single(shortcut => shortcut.Id == parked.Id).Name);
+        Assert.IsTrue(DesktopStateValidator.IsValid(renamed));
+    }
+
+    [TestMethod]
+    public void Rename_RejectsTargetReservedByAnotherTrackedDesktopShortcut()
+    {
+        TrackedShortcut source = CreateShortcut(DesktopRootKind.User);
+        TrackedShortcut existing = source with
+        {
+            Id = Guid.NewGuid(),
+            Name = "Existing.lnk",
+            OriginalPath = Path.Combine(source.RootPath, "Existing.lnk"),
+        };
+        DesktopGuardState state = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(
+                    DesktopRootKind.User,
+                    source.RootPath,
+                    IsBaselined: true,
+                    KnownPaths: [source.OriginalPath, existing.OriginalPath]),
+            ],
+            Shortcuts = [source, existing],
+        };
+
+        Assert.Throws<InvalidOperationException>(
+            () => ShortcutStateTransitions.BeginRename(state, source.Id, "Existing.lnk"));
+    }
+
+    [TestMethod]
+    public void Restore_ClearsHiddenStateAfterHiddenShortcutWasParked()
+    {
+        TrackedShortcut hidden = CreateShortcut(DesktopRootKind.User) with { IsHidden = true };
+        DesktopGuardState initial = StateWithShortcut(ShortcutStatus.ApprovedVisible) with
+        {
+            Shortcuts = [hidden],
+        };
+
+        DesktopGuardState parking = ShortcutStateTransitions.BeginParking(initial, hidden.Id, Guid.NewGuid());
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(parking, hidden.Id);
+        Assert.IsTrue(parked.Shortcuts.Single().IsHidden);
+
+        DesktopGuardState restoring = ShortcutStateTransitions.BeginRestore(parked, hidden.Id);
+        DesktopGuardState restored = ShortcutStateTransitions.CompleteRestore(restoring, hidden.Id);
+
+        Assert.IsFalse(restored.Shortcuts.Single().IsHidden);
+        Assert.IsTrue(DesktopStateValidator.IsValid(restored));
+    }
+
+    [TestMethod]
+    public void Delete_UsesOperationForLocationAndRemovesDesktopCheckpointPath()
+    {
+        DesktopGuardState initial = StateWithShortcut(ShortcutStatus.ApprovedVisible);
+        TrackedShortcut shortcut = initial.Shortcuts.Single();
+
+        DesktopGuardState deleting = ShortcutStateTransitions.BeginDelete(initial, shortcut.Id);
+        Assert.AreEqual(ShortcutOperation.DeletingToRecycleBin, deleting.Shortcuts.Single().Operation);
+        Assert.IsTrue(DesktopStateValidator.IsValid(deleting));
+
+        DesktopGuardState deleted = ShortcutStateTransitions.CompleteDelete(deleting, shortcut.Id);
+        Assert.IsEmpty(deleted.Shortcuts);
+        Assert.IsEmpty(deleted.Roots.Single().KnownPaths);
+        Assert.IsTrue(DesktopStateValidator.IsValid(deleted));
+    }
+
+    [TestMethod]
     public void BeginCreation_RejectsWhenPublicDesktopAlreadyTracksDesktopGuardShortcut()
     {
         string userRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "DesktopGuard.Tests", "User"));

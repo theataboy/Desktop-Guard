@@ -7,4 +7,5 @@ internal sealed record ShortcutListEntry(
     string Name,
     DesktopRootKind RootKind,
     ShortcutStatus? Status,
-    TrackedShortcut? Shortcut);
+    TrackedShortcut? Shortcut,
+    bool IsHidden = false);

@@ -14,6 +14,7 @@ internal sealed class ShortcutFileManager
     private readonly IDesktopRootProvider _rootProvider;
     private readonly IDesktopGuardStateStore _stateStore;
     private readonly IShortcutMoveExecutor _moveExecutor;
+    private readonly IShortcutActionExecutor _actionExecutor;
     private readonly DesktopShortcutCreator _desktopShortcutCreator;
     private readonly TimeSpan _stabilityInterval;
 
@@ -41,7 +42,8 @@ internal sealed class ShortcutFileManager
         IDesktopGuardStateStore stateStore,
         IShortcutMoveExecutor moveExecutor,
         TimeSpan stabilityInterval,
-        IDesktopShortcutLinkWriter? linkWriter = null)
+        IDesktopShortcutLinkWriter? linkWriter = null,
+        IShortcutActionExecutor? actionExecutor = null)
     {
         ArgumentNullException.ThrowIfNull(rootProvider);
         ArgumentNullException.ThrowIfNull(stateStore);
@@ -54,6 +56,7 @@ internal sealed class ShortcutFileManager
         _rootProvider = rootProvider;
         _stateStore = stateStore;
         _moveExecutor = moveExecutor;
+        _actionExecutor = actionExecutor ?? new WindowsShortcutActionExecutor(new WindowsShortcutElevationBroker());
         _desktopShortcutCreator = new DesktopShortcutCreator(
             rootProvider,
             linkWriter ?? new WindowsDesktopShortcutLinkWriter());
@@ -88,6 +91,61 @@ internal sealed class ShortcutFileManager
         return MoveBetweenDesktopsCoreAsync(shortcut, allowExistingDestination: false, cancellationToken);
     }
 
+    public Task RenameAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
+    {
+        return RenameCoreAsync(shortcut, allowExistingDestination: false, cancellationToken);
+    }
+
+    public Task DeleteAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
+    {
+        return DeleteCoreAsync(shortcut, cancellationToken);
+    }
+
+    public Task MakeVisibleAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string sourcePath = GetTrackedShortcutPath(shortcut);
+        if ((File.GetAttributes(sourcePath) & FileAttributes.Hidden) == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        ElevatedShortcutOperationRequest request = CreateActionRequest(
+            ElevatedShortcutOperationKind.MakeVisible,
+            shortcut);
+        return _actionExecutor.MakeVisibleAsync(sourcePath, request, cancellationToken);
+    }
+
+    public void OpenProperties(TrackedShortcut shortcut)
+    {
+        string path = GetTrackedShortcutPath(shortcut);
+        _actionExecutor.OpenProperties(path);
+    }
+
+    public void EnsureRenameDestinationAvailable(TrackedShortcut shortcut, string targetName)
+    {
+        if (!IsShortcutName(targetName)
+            || !string.Equals(
+                Path.GetExtension(shortcut.Name),
+                Path.GetExtension(targetName),
+                StringComparison.OrdinalIgnoreCase)
+            || PathsEqual(shortcut.Name, targetName))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+        }
+
+        string sourcePath = GetTrackedShortcutPath(shortcut);
+        string root = Path.GetDirectoryName(sourcePath)
+            ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+        EnsureNoDestinationEntry(BuildDesktopPath(root, targetName));
+    }
+
+    public bool IsHidden(TrackedShortcut shortcut)
+    {
+        string path = GetTrackedShortcutPath(shortcut);
+        return (File.GetAttributes(path) & FileAttributes.Hidden) != 0;
+    }
+
     public Task RetryPendingOperationAsync(
         TrackedShortcut shortcut,
         CancellationToken cancellationToken,
@@ -103,6 +161,9 @@ internal sealed class ShortcutFileManager
                 allowExistingDestination: true,
                 cancellationToken),
             ShortcutOperation.Creating => RetryDesktopShortcutAsync(shortcut, contentHashPrepared, cancellationToken),
+            ShortcutOperation.Renaming => RenameCoreAsync(shortcut, allowExistingDestination: true, cancellationToken),
+            ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently =>
+                DeleteCoreAsync(shortcut, cancellationToken),
             _ => throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState),
         };
     }
@@ -112,6 +173,16 @@ internal sealed class ShortcutFileManager
         if (shortcut.Operation == ShortcutOperation.Creating)
         {
             return _desktopShortcutCreator.ResolveInterruptedOperation(shortcut);
+        }
+
+        if (shortcut.Operation is ShortcutOperation.Renaming)
+        {
+            return ResolveInterruptedRename(shortcut);
+        }
+
+        if (shortcut.Operation is ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently)
+        {
+            return ResolveInterruptedDelete(shortcut);
         }
 
         if (shortcut.Operation is not (ShortcutOperation.Parking or ShortcutOperation.Restoring or ShortcutOperation.Moving)
@@ -234,6 +305,154 @@ internal sealed class ShortcutFileManager
 
         string folder = Path.Combine(_stateStore.RecoveryDirectoryPath, shortcut.RecoveryFolderId.Value.ToString("N"));
         return BuildRecoveryFilePath(folder, shortcut.Name);
+    }
+
+    private async Task RenameCoreAsync(
+        TrackedShortcut shortcut,
+        bool allowExistingDestination,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidatePendingRename(shortcut);
+        string sourcePath = GetTrackedShortcutPath(shortcut, validateFile: false);
+        string sourceRoot = Path.GetDirectoryName(sourcePath)
+            ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+        string destinationPath = BuildDesktopPath(sourceRoot, shortcut.TargetName!);
+        bool sourceExists = HasSafeFile(sourcePath, sourceRoot);
+        bool destinationExists = HasSafeFile(destinationPath, sourceRoot);
+        if (allowExistingDestination && !sourceExists && destinationExists)
+        {
+            return;
+        }
+
+        if (!sourceExists)
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceMissing);
+        }
+
+        if (destinationExists)
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.DestinationConflict);
+        }
+
+        EnsureNoDestinationEntry(destinationPath);
+        ElevatedShortcutOperationRequest request = CreateActionRequest(
+            ElevatedShortcutOperationKind.RenameShortcut,
+            shortcut,
+            shortcut.TargetName,
+            allowExistingDestination);
+        await _actionExecutor.RenameAsync(sourcePath, destinationPath, request, cancellationToken)
+            .ConfigureAwait(false);
+        ValidateRegularFile(destinationPath, sourceRoot);
+        if (HasSafeFile(sourcePath, sourceRoot))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AmbiguousRecovery);
+        }
+    }
+
+    private async Task DeleteCoreAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ShortcutOperation expectedOperation = shortcut.Status == ShortcutStatus.Parked
+            ? ShortcutOperation.DeletingPermanently
+            : ShortcutOperation.DeletingToRecycleBin;
+        if (shortcut.Operation != expectedOperation
+            || shortcut.OperationId is null
+            || shortcut.OperationId == Guid.Empty)
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
+        }
+
+        string sourcePath = GetTrackedShortcutPath(shortcut, validateFile: false);
+        string sourceRoot = Path.GetDirectoryName(sourcePath)
+            ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+        if (!HasSafeFile(sourcePath, sourceRoot))
+        {
+            return;
+        }
+
+        ElevatedShortcutOperationKind kind = shortcut.Status == ShortcutStatus.Parked
+            ? ElevatedShortcutOperationKind.DeletePermanently
+            : ElevatedShortcutOperationKind.DeleteToRecycleBin;
+        ElevatedShortcutOperationRequest request = CreateActionRequest(kind, shortcut);
+        if (kind == ElevatedShortcutOperationKind.DeletePermanently)
+        {
+            await _actionExecutor.DeletePermanentlyAsync(sourcePath, request, cancellationToken)
+                .ConfigureAwait(false);
+            DeleteEmptyRecoveryFolder(sourceRoot);
+        }
+        else
+        {
+            await _actionExecutor.DeleteToRecycleBinAsync(sourcePath, request, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (HasSafeFile(sourcePath, sourceRoot))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AmbiguousRecovery);
+        }
+    }
+
+    private PendingOperationResolution ResolveInterruptedRename(TrackedShortcut shortcut)
+    {
+        try
+        {
+            if (shortcut.OperationId is null
+                || shortcut.OperationId == Guid.Empty
+                || shortcut.TargetName is null
+                || !IsShortcutName(shortcut.TargetName))
+            {
+                return PendingOperationResolution.Ambiguous;
+            }
+
+            string sourcePath = GetTrackedShortcutPath(shortcut, validateFile: false);
+            string root = Path.GetDirectoryName(sourcePath)
+                ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+            string destinationPath = BuildDesktopPath(root, shortcut.TargetName);
+            bool sourceExists = HasSafeFile(sourcePath, root);
+            bool destinationExists = HasSafeFile(destinationPath, root);
+            if (sourceExists && !destinationExists)
+            {
+                return PendingOperationResolution.OperationDidNotMoveFile;
+            }
+
+            if (!sourceExists && destinationExists)
+            {
+                return PendingOperationResolution.OperationMovedFile;
+            }
+        }
+        catch (ShortcutFileOperationException)
+        {
+        }
+
+        return PendingOperationResolution.Ambiguous;
+    }
+
+    private PendingOperationResolution ResolveInterruptedDelete(TrackedShortcut shortcut)
+    {
+        if (shortcut.OperationId is null || shortcut.OperationId == Guid.Empty)
+        {
+            return PendingOperationResolution.Ambiguous;
+        }
+
+        try
+        {
+            string sourcePath = GetTrackedShortcutPath(shortcut, validateFile: false);
+            string root = Path.GetDirectoryName(sourcePath)
+                ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+            return HasSafeFile(sourcePath, root)
+                ? PendingOperationResolution.OperationDidNotMoveFile
+                : PendingOperationResolution.OperationMovedFile;
+        }
+        catch (ShortcutFileOperationException exception)
+            when (exception.Failure == ShortcutFileOperationFailure.SourceMissing)
+        {
+            return PendingOperationResolution.OperationMovedFile;
+        }
+        catch (ShortcutFileOperationException)
+        {
+            return PendingOperationResolution.Ambiguous;
+        }
     }
 
     private async Task ParkCoreAsync(
@@ -580,6 +799,89 @@ internal sealed class ShortcutFileManager
         }
     }
 
+    private static void ValidatePendingRename(TrackedShortcut shortcut)
+    {
+        if (shortcut.Operation != ShortcutOperation.Renaming
+            || shortcut.OperationId is null
+            || shortcut.OperationId == Guid.Empty
+            || shortcut.TargetName is null
+            || !IsShortcutName(shortcut.TargetName)
+            || !string.Equals(
+                Path.GetExtension(shortcut.Name),
+                Path.GetExtension(shortcut.TargetName),
+                StringComparison.OrdinalIgnoreCase)
+            || PathsEqual(shortcut.Name, shortcut.TargetName))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
+        }
+    }
+
+    private string GetTrackedShortcutPath(TrackedShortcut shortcut, bool validateFile = true)
+    {
+        if (!IsShortcutName(shortcut.Name))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+        }
+
+        string root;
+        string path;
+        if (shortcut.Status == ShortcutStatus.Parked)
+        {
+            string recoveryFolder = validateFile
+                ? GetExistingRecoveryFolder(shortcut)
+                : GetExistingOrExpectedRecoveryFolder(shortcut);
+            root = recoveryFolder;
+            path = BuildRecoveryFilePath(recoveryFolder, shortcut.Name);
+        }
+        else
+        {
+            root = GetCurrentDesktopRoot(shortcut.RootKind, shortcut.RootPath);
+            path = ValidateDesktopPath(shortcut, shortcut.RootKind, root);
+        }
+
+        if (validateFile)
+        {
+            ValidateRegularFile(path, root);
+        }
+
+        return path;
+    }
+
+    private static ElevatedShortcutOperationRequest CreateActionRequest(
+        ElevatedShortcutOperationKind kind,
+        TrackedShortcut shortcut,
+        string? targetName = null,
+        bool isRetry = false)
+    {
+        return new ElevatedShortcutOperationRequest(
+            kind,
+            shortcut.Id,
+            shortcut.OperationId is Guid operationId && operationId != Guid.Empty
+                ? operationId
+                : Guid.NewGuid(),
+            shortcut.Status == ShortcutStatus.Parked ? shortcut.RecoveryFolderId : null,
+            shortcut.Name,
+            shortcut.Status == ShortcutStatus.Parked ? null : shortcut.RootKind,
+            DestinationRootKind: null,
+            IsRetry: isRetry,
+            TargetName: targetName);
+    }
+
+    private static void EnsureNoDestinationEntry(string destinationPath)
+    {
+        try
+        {
+            _ = File.GetAttributes(destinationPath);
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.DestinationConflict);
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+    }
+
     private string EnsureRecoveryFolder(TrackedShortcut shortcut)
     {
         try
@@ -782,7 +1084,7 @@ internal sealed class ShortcutFileManager
         }
         catch (Exception exception) when (IsExpectedFileSystemException(exception))
         {
-            // A restored shortcut is safe even if its empty recovery folder remains.
+            // The explicit file action is complete even if its empty recovery folder remains.
         }
     }
 

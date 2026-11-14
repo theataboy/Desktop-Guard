@@ -192,7 +192,10 @@ internal sealed class DesktopMonitor : IDisposable
                     FileSystemWatcher watcher = new(canonicalPath, "*")
                     {
                         IncludeSubdirectories = false,
-                        NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                        NotifyFilter = NotifyFilters.FileName
+                            | NotifyFilters.LastWrite
+                            | NotifyFilters.Size
+                            | NotifyFilters.Attributes,
                         EnableRaisingEvents = false,
                     };
                     watcher.Created += OnFileSystemChanged;

@@ -15,4 +15,6 @@ public sealed record TrackedShortcut(
     DesktopRootKind? TargetRootKind = null,
     string? TargetRootPath = null,
     Guid? OperationId = null,
-    byte[]? OperationContentHash = null);
+    byte[]? OperationContentHash = null,
+    string? TargetName = null,
+    bool IsHidden = false);

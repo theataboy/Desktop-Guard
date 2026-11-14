@@ -19,8 +19,9 @@ public sealed class ShortcutFileManagerTests
         string shortcutPath = Path.Combine(desktop, "Program.lnk");
         const string contents = "untrusted shortcut bytes";
         File.WriteAllText(shortcutPath, contents);
+        File.SetAttributes(shortcutPath, File.GetAttributes(shortcutPath) | FileAttributes.Hidden);
         ShortcutFileManager manager = CreateManager(desktop, data);
-        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk");
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk") with { IsHidden = true };
         DesktopGuardState parking = ShortcutStateTransitions.BeginParking(
             new DesktopGuardState { Shortcuts = [shortcut] },
             shortcut.Id,
@@ -32,6 +33,7 @@ public sealed class ShortcutFileManagerTests
         Assert.IsFalse(File.Exists(shortcutPath));
         Assert.IsTrue(File.Exists(recoveryPath));
         Assert.AreEqual(contents, File.ReadAllText(recoveryPath));
+        Assert.AreNotEqual((FileAttributes)0, File.GetAttributes(recoveryPath) & FileAttributes.Hidden);
         Assert.AreEqual(
             PendingOperationResolution.OperationMovedFile,
             manager.ResolveInterruptedOperation(parking.Shortcuts.Single()));
@@ -42,6 +44,7 @@ public sealed class ShortcutFileManagerTests
 
         Assert.IsTrue(File.Exists(shortcutPath));
         Assert.AreEqual(contents, File.ReadAllText(shortcutPath));
+        Assert.AreEqual((FileAttributes)0, File.GetAttributes(shortcutPath) & FileAttributes.Hidden);
         Assert.IsFalse(File.Exists(recoveryPath));
         Assert.AreEqual(
             PendingOperationResolution.OperationMovedFile,
@@ -106,6 +109,165 @@ public sealed class ShortcutFileManagerTests
         Assert.AreEqual(contents, File.ReadAllText(userPath));
         Assert.AreEqual(ShortcutStatus.Pending, moved.Shortcuts.Single().Status);
         Assert.AreEqual(DesktopRootKind.User, moved.Shortcuts.Single().RootKind);
+    }
+
+    [TestMethod]
+    public async Task Rename_ChangesBasenameAndPreservesShortcutExtension()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.url");
+        string destinationPath = Path.Combine(desktop, "Renamed.url");
+        File.WriteAllText(sourcePath, "untrusted shortcut bytes");
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.url");
+        DesktopGuardState state = new()
+        {
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [sourcePath])],
+            Shortcuts = [shortcut],
+        };
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(state, shortcut.Id, "Renamed.url");
+        ShortcutFileManager manager = CreateManager(desktop, data, new LocalShortcutActionExecutor());
+
+        await manager.RenameAsync(renaming.Shortcuts.Single(), CancellationToken.None);
+
+        Assert.IsFalse(File.Exists(sourcePath));
+        Assert.AreEqual("untrusted shortcut bytes", File.ReadAllText(destinationPath));
+        Assert.AreEqual(
+            PendingOperationResolution.OperationMovedFile,
+            manager.ResolveInterruptedOperation(renaming.Shortcuts.Single()));
+        TrackedShortcut completed = ShortcutStateTransitions.CompleteRename(renaming, shortcut.Id).Shortcuts.Single();
+        Assert.AreEqual("Renamed.url", completed.Name);
+        Assert.AreEqual(destinationPath, completed.OriginalPath);
+    }
+
+    [TestMethod]
+    public async Task Rename_ParkedShortcutRenamesOnlyItsRecoveryFile()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.lnk");
+        File.WriteAllText(sourcePath, "shortcut bytes");
+        ShortcutFileManager manager = CreateManager(desktop, data, new LocalShortcutActionExecutor());
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk");
+        DesktopGuardState parking = ShortcutStateTransitions.BeginParking(
+            new DesktopGuardState { Shortcuts = [shortcut] },
+            shortcut.Id,
+            Guid.NewGuid());
+        await manager.ParkAsync(parking.Shortcuts.Single(), CancellationToken.None);
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(parking, shortcut.Id);
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(parked, shortcut.Id, "Archive.lnk");
+        string originalRecoveryPath = manager.GetRecoveryFilePath(renaming.Shortcuts.Single());
+
+        await manager.RenameAsync(renaming.Shortcuts.Single(), CancellationToken.None);
+
+        TrackedShortcut renamed = ShortcutStateTransitions.CompleteRename(renaming, shortcut.Id).Shortcuts.Single();
+        Assert.IsFalse(File.Exists(originalRecoveryPath));
+        Assert.AreEqual("shortcut bytes", File.ReadAllText(manager.GetRecoveryFilePath(renamed)));
+        Assert.IsFalse(File.Exists(Path.Combine(desktop, "Archive.lnk")));
+    }
+
+    [TestMethod]
+    public void EnsureRenameDestinationAvailable_RejectsCollisionWithoutChangingEitherShortcut()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.lnk");
+        string destinationPath = Path.Combine(desktop, "Existing.lnk");
+        File.WriteAllText(sourcePath, "source");
+        File.WriteAllText(destinationPath, "destination");
+        ShortcutFileManager manager = CreateManager(desktop, data, new LocalShortcutActionExecutor());
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk");
+
+        ShortcutFileOperationException exception = Assert.Throws<ShortcutFileOperationException>(
+            () => manager.EnsureRenameDestinationAvailable(shortcut, "Existing.lnk"));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.DestinationConflict, exception.Failure);
+        Assert.AreEqual("source", File.ReadAllText(sourcePath));
+        Assert.AreEqual("destination", File.ReadAllText(destinationPath));
+    }
+
+    [TestMethod]
+    public async Task Delete_DesktopShortcutUsesRecycleBinAction()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string shortcutPath = Path.Combine(desktop, "Program.lnk");
+        File.WriteAllText(shortcutPath, "shortcut bytes");
+        LocalShortcutActionExecutor actions = new();
+        ShortcutFileManager manager = CreateManager(desktop, data, actions);
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk");
+        DesktopGuardState deleting = ShortcutStateTransitions.BeginDelete(
+            new DesktopGuardState { Shortcuts = [shortcut] },
+            shortcut.Id);
+
+        await manager.DeleteAsync(deleting.Shortcuts.Single(), CancellationToken.None);
+
+        Assert.AreEqual(1, actions.RecycleBinDeleteCount);
+        Assert.AreEqual(0, actions.PermanentDeleteCount);
+        Assert.IsFalse(File.Exists(shortcutPath));
+        Assert.AreEqual(
+            PendingOperationResolution.OperationMovedFile,
+            manager.ResolveInterruptedOperation(deleting.Shortcuts.Single()));
+    }
+
+    [TestMethod]
+    public async Task Delete_ParkedShortcutIsPermanentlyRemovedFromRecovery()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string shortcutPath = Path.Combine(desktop, "Program.lnk");
+        File.WriteAllText(shortcutPath, "shortcut bytes");
+        LocalShortcutActionExecutor actions = new();
+        ShortcutFileManager manager = CreateManager(desktop, data, actions);
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk");
+        DesktopGuardState parking = ShortcutStateTransitions.BeginParking(
+            new DesktopGuardState { Shortcuts = [shortcut] },
+            shortcut.Id,
+            Guid.NewGuid());
+        await manager.ParkAsync(parking.Shortcuts.Single(), CancellationToken.None);
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(parking, shortcut.Id);
+        string recoveryPath = manager.GetRecoveryFilePath(parked.Shortcuts.Single());
+        DesktopGuardState deleting = ShortcutStateTransitions.BeginDelete(parked, shortcut.Id);
+
+        await manager.DeleteAsync(deleting.Shortcuts.Single(), CancellationToken.None);
+
+        Assert.AreEqual(0, actions.RecycleBinDeleteCount);
+        Assert.AreEqual(1, actions.PermanentDeleteCount);
+        Assert.IsFalse(File.Exists(recoveryPath));
+    }
+
+    [TestMethod]
+    public async Task MakeVisible_ClearsOnlyHiddenAttribute()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string shortcutPath = Path.Combine(desktop, "Hidden.lnk");
+        File.WriteAllText(shortcutPath, "shortcut bytes");
+        File.SetAttributes(shortcutPath, File.GetAttributes(shortcutPath) | FileAttributes.Hidden | FileAttributes.ReadOnly);
+        ShortcutFileManager manager = CreateManager(desktop, data, new LocalShortcutActionExecutor());
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Hidden.lnk") with { IsHidden = true };
+
+        try
+        {
+            await manager.MakeVisibleAsync(shortcut, CancellationToken.None);
+
+            FileAttributes attributes = File.GetAttributes(shortcutPath);
+            Assert.AreEqual((FileAttributes)0, attributes & FileAttributes.Hidden);
+            Assert.AreNotEqual((FileAttributes)0, attributes & FileAttributes.ReadOnly);
+        }
+        finally
+        {
+            if (File.Exists(shortcutPath))
+            {
+                File.SetAttributes(shortcutPath, File.GetAttributes(shortcutPath) & ~FileAttributes.ReadOnly);
+            }
+        }
     }
 
     [TestMethod]
@@ -270,18 +432,35 @@ public sealed class ShortcutFileManagerTests
         Assert.IsFalse(Directory.Exists(Path.Combine(data, "Recovery")));
     }
 
-    private static ShortcutFileManager CreateManager(string desktop, string dataDirectory)
+    private static ShortcutFileManager CreateManager(
+        string desktop,
+        string dataDirectory,
+        IShortcutActionExecutor? actionExecutor = null)
     {
         IDesktopRootProvider provider = new FixedDesktopRootProvider(desktop);
         DesktopGuardStateStore store = new(dataDirectory);
-        return new ShortcutFileManager(provider, store, TimeSpan.Zero);
+        return new ShortcutFileManager(
+            provider,
+            store,
+            new ShortcutMoveExecutor(new NoElevationBroker()),
+            TimeSpan.Zero,
+            actionExecutor: actionExecutor);
     }
 
-    private static ShortcutFileManager CreateManager(string userDesktop, string publicDesktop, string dataDirectory)
+    private static ShortcutFileManager CreateManager(
+        string userDesktop,
+        string publicDesktop,
+        string dataDirectory,
+        IShortcutActionExecutor? actionExecutor = null)
     {
         IDesktopRootProvider provider = new FixedDesktopRootProvider(userDesktop, publicDesktop);
         DesktopGuardStateStore store = new(dataDirectory);
-        return new ShortcutFileManager(provider, store, TimeSpan.Zero);
+        return new ShortcutFileManager(
+            provider,
+            store,
+            new ShortcutMoveExecutor(new NoElevationBroker()),
+            TimeSpan.Zero,
+            actionExecutor: actionExecutor);
     }
 
     private static TrackedShortcut CreateShortcut(
@@ -327,6 +506,68 @@ public sealed class ShortcutFileManagerTests
                     new DesktopRoot(DesktopRootKind.User, desktop),
                     new DesktopRoot(DesktopRootKind.Public, publicDesktop),
                 ];
+        }
+    }
+
+    private sealed class NoElevationBroker : IShortcutElevationBroker
+    {
+        public Task ExecuteAsync(ElevatedShortcutOperationRequest request, CancellationToken cancellationToken)
+        {
+            throw new AssertFailedException("Tests must not start the elevation helper.");
+        }
+    }
+
+    private sealed class LocalShortcutActionExecutor : IShortcutActionExecutor
+    {
+        public int RecycleBinDeleteCount { get; private set; }
+
+        public int PermanentDeleteCount { get; private set; }
+
+        public Task RenameAsync(
+            string sourcePath,
+            string destinationPath,
+            ElevatedShortcutOperationRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(sourcePath, destinationPath);
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteToRecycleBinAsync(
+            string path,
+            ElevatedShortcutOperationRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RecycleBinDeleteCount++;
+            File.Delete(path);
+            return Task.CompletedTask;
+        }
+
+        public Task DeletePermanentlyAsync(
+            string path,
+            ElevatedShortcutOperationRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PermanentDeleteCount++;
+            File.Delete(path);
+            return Task.CompletedTask;
+        }
+
+        public Task MakeVisibleAsync(
+            string path,
+            ElevatedShortcutOperationRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.Hidden);
+            return Task.CompletedTask;
+        }
+
+        public void OpenProperties(string path)
+        {
         }
     }
 

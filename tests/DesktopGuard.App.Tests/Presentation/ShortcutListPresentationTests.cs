@@ -76,6 +76,29 @@ public sealed class ShortcutListPresentationTests
             presentation.GetVisibleRows().Select(row => row.Status).ToArray());
     }
 
+    [TestMethod]
+    public void HiddenShortcut_RemainsInItsNormalStatusFilter()
+    {
+        ShortcutListPresentation presentation = new();
+        presentation.SetRows(
+        [
+            CreateRow(
+                "Hidden.lnk",
+                DesktopRootKind.User,
+                "User Desktop",
+                "Review required",
+                needsReview: true,
+                isHidden: true),
+        ]);
+        presentation.SetFilter(ShortcutListFilter.NeedsReview);
+
+        ShortcutListPresentationRow row = presentation.GetVisibleRows().Single();
+
+        Assert.AreEqual("Hidden.lnk", row.Entry.Name);
+        Assert.IsTrue(row.Entry.IsHidden);
+        Assert.AreEqual(1, presentation.CountFor(ShortcutListFilter.NeedsReview));
+    }
+
     private static ShortcutListPresentationRow CreateRow(
         string name,
         DesktopRootKind rootKind,
@@ -83,9 +106,10 @@ public sealed class ShortcutListPresentationTests
         string status,
         bool needsReview = false,
         bool approved = false,
-        bool recovery = false)
+        bool recovery = false,
+        bool isHidden = false)
     {
-        ShortcutListEntry entry = new(name, rootKind, Status: null, Shortcut: null);
-        return new ShortcutListPresentationRow(entry, location, status, needsReview, approved, recovery);
+        ShortcutListEntry entry = new(name, rootKind, Status: null, Shortcut: null, IsHidden: isHidden);
+        return new ShortcutListPresentationRow(entry, location, status, needsReview, approved, recovery, isHidden);
     }
 }

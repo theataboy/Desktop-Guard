@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DesktopGuard.App.Persistence;
 using DesktopGuard.Core.DesktopScanning;
 using DesktopGuard.Core.Shortcuts;
@@ -147,6 +148,49 @@ public sealed class DesktopGuardStateStoreTests
         Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
         Assert.IsFalse(migrated.StartAtSignIn);
         Assert.IsTrue(migrated.StartMinimized);
+    }
+
+    [TestMethod]
+    public void Load_VersionFourStateAddsHiddenDefaultsWithoutChangingDecisions()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string shortcutPath = Path.Combine(desktop, "Program.lnk");
+        DesktopGuardState versionFour = new()
+        {
+            SchemaVersion = 4,
+            StartAtSignIn = false,
+            StartMinimized = false,
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [shortcutPath])],
+            Shortcuts =
+            [
+                new TrackedShortcut(
+                    Guid.NewGuid(),
+                    DesktopRootKind.User,
+                    desktop,
+                    "Program.lnk",
+                    shortcutPath,
+                    ShortcutStatus.Pending,
+                    StatusBeforeParking: null,
+                    Operation: ShortcutOperation.None,
+                    RecoveryFolderId: null),
+            ],
+        };
+        JsonObject legacyDocument = JsonSerializer.SerializeToNode(versionFour)!.AsObject();
+        JsonObject legacyShortcut = legacyDocument["Shortcuts"]!.AsArray().Single()!.AsObject();
+        legacyShortcut.Remove(nameof(TrackedShortcut.IsHidden));
+        legacyShortcut.Remove(nameof(TrackedShortcut.TargetName));
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), legacyDocument.ToJsonString());
+        DesktopGuardStateStore store = new(temporaryDirectory.Path);
+
+        DesktopGuardState migrated = store.Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.IsFalse(migrated.StartAtSignIn);
+        Assert.IsFalse(migrated.StartMinimized);
+        Assert.AreEqual(ShortcutStatus.Pending, migrated.Shortcuts.Single().Status);
+        Assert.IsFalse(migrated.Shortcuts.Single().IsHidden);
+        Assert.AreEqual(shortcutPath, migrated.Roots.Single().KnownPaths.Single());
     }
 
     [TestMethod]

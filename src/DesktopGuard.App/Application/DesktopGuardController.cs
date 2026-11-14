@@ -128,7 +128,8 @@ internal sealed class DesktopGuardController
                 shortcut.Name,
                 shortcut.RootKind,
                 shortcut.Status,
-                shortcut))
+                shortcut,
+                TryReadHidden(shortcut)))
             .ToList();
 
         foreach (DesktopRootSnapshot publicRoot in _inventory.Roots.Where(
@@ -138,6 +139,9 @@ internal sealed class DesktopGuardController
                 root => root.RootKind == DesktopRootKind.Public);
             entries.AddRange(publicRoot.Entries
                 .Where(entry => entry.Kind == DesktopEntryKind.Shortcut
+                    && (publicCheckpoint is null
+                        || !PathsEqual(publicCheckpoint.RootPath, publicRoot.RootPath)
+                        || publicCheckpoint.KnownPaths.Any(path => PathsEqual(path, entry.Path)))
                     && (publicCheckpoint is null || !PathsEqual(publicCheckpoint.RootPath, publicRoot.RootPath)
                         || !_state.Shortcuts.Any(shortcut => shortcut.RootKind == DesktopRootKind.Public
                             && PathsEqual(shortcut.RootPath, publicRoot.RootPath)
@@ -146,13 +150,30 @@ internal sealed class DesktopGuardController
                     entry.Name,
                     DesktopRootKind.Public,
                     Status: null,
-                    Shortcut: null)));
+                    Shortcut: null,
+                    IsHidden: entry.IsHidden)));
         }
 
         return entries
             .OrderBy(entry => entry.RootKind)
             .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private bool TryReadHidden(TrackedShortcut shortcut)
+    {
+        try
+        {
+            return _fileManager.IsHidden(shortcut);
+        }
+        catch (Exception exception) when (exception is ShortcutFileOperationException
+            or StateStoreException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            return shortcut.IsHidden;
+        }
     }
 
     public void Initialize()
@@ -231,6 +252,156 @@ internal sealed class DesktopGuardController
             DesktopGuardState updated = ShortcutStateTransitions.Approve(_state, shortcutId);
             _stateStore.Save(updated);
             _state = updated;
+            _lastFailure = null;
+        }
+        catch (Exception exception)
+        {
+            if (exception is not OperationCanceledException)
+            {
+                _lastFailure = exception;
+            }
+
+            throw;
+        }
+        finally
+        {
+            _stateGate.Release();
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    public async Task RenameAsync(Guid shortcutId, string baseName, CancellationToken cancellationToken)
+    {
+        await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureManageableShortcut(shortcutId);
+            TrackedShortcut shortcut = FindShortcut(shortcutId);
+            string targetName = baseName + Path.GetExtension(shortcut.Name);
+            _fileManager.EnsureRenameDestinationAvailable(shortcut, targetName);
+            bool isHidden = _fileManager.IsHidden(shortcut);
+            DesktopGuardState prepared = ShortcutStateTransitions.SetHidden(_state, shortcutId, isHidden);
+            DesktopGuardState pending = ShortcutStateTransitions.BeginRename(prepared, shortcutId, targetName);
+            _stateStore.Save(pending);
+            _state = pending;
+
+            try
+            {
+                await _fileManager.RenameAsync(FindShortcut(pending, shortcutId), cancellationToken)
+                    .ConfigureAwait(false);
+                DesktopGuardState completed = ShortcutStateTransitions.CompleteRename(_state, shortcutId);
+                _stateStore.Save(completed);
+                _state = completed;
+                _unresolvedOperationIds.Remove(shortcutId);
+                _lastFailure = null;
+            }
+            catch
+            {
+                if (TryReconcileFailedOperation(shortcutId) != PendingOperationResolution.OperationMovedFile)
+                {
+                    throw;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            if (exception is not OperationCanceledException)
+            {
+                _lastFailure = exception;
+            }
+
+            throw;
+        }
+        finally
+        {
+            _stateGate.Release();
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    public async Task DeleteAsync(Guid shortcutId, CancellationToken cancellationToken)
+    {
+        await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureManageableShortcut(shortcutId);
+            DesktopGuardState pending = ShortcutStateTransitions.BeginDelete(_state, shortcutId);
+            _stateStore.Save(pending);
+            _state = pending;
+
+            try
+            {
+                await _fileManager.DeleteAsync(FindShortcut(pending, shortcutId), cancellationToken)
+                    .ConfigureAwait(false);
+                DesktopGuardState completed = ShortcutStateTransitions.CompleteDelete(_state, shortcutId);
+                _stateStore.Save(completed);
+                _state = completed;
+                _unresolvedOperationIds.Remove(shortcutId);
+                _lastFailure = null;
+            }
+            catch
+            {
+                if (TryReconcileFailedOperation(shortcutId) != PendingOperationResolution.OperationMovedFile)
+                {
+                    throw;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            if (exception is not OperationCanceledException)
+            {
+                _lastFailure = exception;
+            }
+
+            throw;
+        }
+        finally
+        {
+            _stateGate.Release();
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    public async Task MakeVisibleAsync(Guid shortcutId, CancellationToken cancellationToken)
+    {
+        await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureManageableShortcut(shortcutId);
+            await _fileManager.MakeVisibleAsync(FindShortcut(shortcutId), cancellationToken).ConfigureAwait(false);
+            DesktopGuardState updated = ShortcutStateTransitions.SetHidden(_state, shortcutId, false);
+            _stateStore.Save(updated);
+            _state = updated;
+            _lastFailure = null;
+        }
+        catch (Exception exception)
+        {
+            if (exception is not OperationCanceledException)
+            {
+                _lastFailure = exception;
+            }
+
+            throw;
+        }
+        finally
+        {
+            _stateGate.Release();
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    public async Task OpenPropertiesAsync(Guid shortcutId, CancellationToken cancellationToken)
+    {
+        await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureManageableShortcut(shortcutId);
+            _fileManager.OpenProperties(FindShortcut(shortcutId));
             _lastFailure = null;
         }
         catch (Exception exception)
@@ -360,7 +531,9 @@ internal sealed class DesktopGuardController
         try
         {
             EnsureManageableShortcut(shortcutId);
-            DesktopGuardState pending = ShortcutStateTransitions.BeginParking(_state, shortcutId, Guid.NewGuid());
+            bool isHidden = _fileManager.IsHidden(FindShortcut(shortcutId));
+            DesktopGuardState prepared = ShortcutStateTransitions.SetHidden(_state, shortcutId, isHidden);
+            DesktopGuardState pending = ShortcutStateTransitions.BeginParking(prepared, shortcutId, Guid.NewGuid());
             _stateStore.Save(pending);
             _state = pending;
 
@@ -528,6 +701,9 @@ internal sealed class DesktopGuardController
                 ShortcutOperation.Restoring => ShortcutStateTransitions.CompleteRestore(_state, shortcutId),
                 ShortcutOperation.Moving => ShortcutStateTransitions.CompleteMove(_state, shortcutId),
                 ShortcutOperation.Creating => ShortcutStateTransitions.CompleteCreation(_state, shortcutId),
+                ShortcutOperation.Renaming => ShortcutStateTransitions.CompleteRename(_state, shortcutId),
+                ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently =>
+                    ShortcutStateTransitions.CompleteDelete(_state, shortcutId),
                 _ => throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState),
             };
             _stateStore.Save(completed);
@@ -565,7 +741,10 @@ internal sealed class DesktopGuardController
             item => item.Operation is ShortcutOperation.Parking
                 or ShortcutOperation.Restoring
                 or ShortcutOperation.Moving
-                or ShortcutOperation.Creating).ToArray())
+                or ShortcutOperation.Creating
+                or ShortcutOperation.Renaming
+                or ShortcutOperation.DeletingToRecycleBin
+                or ShortcutOperation.DeletingPermanently).ToArray())
         {
             PendingOperationResolution resolution;
             try
@@ -670,6 +849,16 @@ internal sealed class DesktopGuardController
                 ShortcutStateTransitions.CancelCreation(state, shortcutId),
             ShortcutOperation.Creating when resolution == PendingOperationResolution.OperationMovedFile =>
                 ShortcutStateTransitions.CompleteCreation(state, shortcutId),
+            ShortcutOperation.Renaming when resolution == PendingOperationResolution.OperationDidNotMoveFile =>
+                ShortcutStateTransitions.CancelRename(state, shortcutId),
+            ShortcutOperation.Renaming when resolution == PendingOperationResolution.OperationMovedFile =>
+                ShortcutStateTransitions.CompleteRename(state, shortcutId),
+            ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently
+                when resolution == PendingOperationResolution.OperationDidNotMoveFile =>
+                ShortcutStateTransitions.CancelDelete(state, shortcutId),
+            ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently
+                when resolution == PendingOperationResolution.OperationMovedFile =>
+                ShortcutStateTransitions.CompleteDelete(state, shortcutId),
             _ => null,
         };
     }

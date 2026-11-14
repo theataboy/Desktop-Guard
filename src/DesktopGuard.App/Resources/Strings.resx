@@ -69,6 +69,51 @@
   <data name="Approve" xml:space="preserve">
     <value>Approve</value>
   </data>
+  <data name="Rename" xml:space="preserve">
+    <value>Rename</value>
+  </data>
+  <data name="Delete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="Properties" xml:space="preserve">
+    <value>Properties</value>
+  </data>
+  <data name="MakeVisible" xml:space="preserve">
+    <value>Make visible</value>
+  </data>
+  <data name="MoreShortcutActions" xml:space="preserve">
+    <value>More shortcut actions</value>
+  </data>
+  <data name="RenameShortcutTitle" xml:space="preserve">
+    <value>Rename shortcut</value>
+  </data>
+  <data name="RenameShortcutPrompt" xml:space="preserve">
+    <value>Choose a new name. DG keeps the extension.</value>
+  </data>
+  <data name="RenameShortcutExtensionLabel" xml:space="preserve">
+    <value>Extension</value>
+  </data>
+  <data name="Renaming" xml:space="preserve">
+    <value>Renaming shortcut...</value>
+  </data>
+  <data name="MovingToRecycleBin" xml:space="preserve">
+    <value>Moving shortcut to the Recycle Bin...</value>
+  </data>
+  <data name="PermanentlyDeleting" xml:space="preserve">
+    <value>Permanently deleting shortcut...</value>
+  </data>
+  <data name="OpeningProperties" xml:space="preserve">
+    <value>Opening shortcut properties...</value>
+  </data>
+  <data name="MakingShortcutVisible" xml:space="preserve">
+    <value>Making shortcut visible...</value>
+  </data>
+  <data name="HiddenNameFormat" xml:space="preserve">
+    <value>{0} (Hidden)</value>
+  </data>
+  <data name="PermanentDeleteConfirmationFormat" xml:space="preserve">
+    <value>Delete {0} permanently from Recovery? This cannot be undone.</value>
+  </data>
   <data name="Park" xml:space="preserve">
     <value>Park</value>
   </data>

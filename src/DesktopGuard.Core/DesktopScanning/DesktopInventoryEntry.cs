@@ -5,4 +5,5 @@ public sealed record DesktopInventoryEntry(
     string RootPath,
     string Path,
     string Name,
-    DesktopEntryKind Kind);
+    DesktopEntryKind Kind,
+    bool IsHidden = false);

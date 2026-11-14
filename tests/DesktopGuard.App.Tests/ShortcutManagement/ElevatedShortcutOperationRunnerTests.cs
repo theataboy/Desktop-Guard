@@ -66,6 +66,50 @@ public sealed class ElevatedShortcutOperationRunnerTests
         Assert.AreEqual(Path.Combine(publicDesktop, request.Name), destinationPath);
     }
 
+    [TestMethod]
+    public void IsValidRequest_RenameRequiresSameShortcutExtensionAndLeafName()
+    {
+        ElevatedShortcutOperationRequest valid = CreateRequest() with
+        {
+            Kind = ElevatedShortcutOperationKind.RenameShortcut,
+            DestinationRootKind = null,
+            TargetName = "Renamed.lnk",
+        };
+
+        Assert.IsTrue(ElevatedShortcutOperationRunner.IsValidRequest(valid));
+        Assert.IsFalse(ElevatedShortcutOperationRunner.IsValidRequest(valid with { TargetName = "Renamed.url" }));
+        Assert.IsFalse(ElevatedShortcutOperationRunner.IsValidRequest(valid with { TargetName = "..\\Renamed.lnk" }));
+    }
+
+    [TestMethod]
+    public void ResolvePaths_RenameUsesValidatedTargetNameUnderSelectedDesktop()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string userDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string localAppData = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "LocalAppData")).FullName;
+        ElevatedShortcutOperationRequest request = CreateRequest() with
+        {
+            Kind = ElevatedShortcutOperationKind.RenameShortcut,
+            DestinationRootKind = null,
+            TargetName = "Renamed.lnk",
+        };
+        ElevatedShortcutOperationRunner.InteractiveUserFolders userFolders = new(userDesktop, publicDesktop, localAppData);
+
+        (string sourcePath, string destinationPath) = ElevatedShortcutOperationRunner.ResolvePaths(request, userFolders);
+
+        Assert.AreEqual(Path.Combine(userDesktop, request.Name), sourcePath);
+        Assert.AreEqual(Path.Combine(userDesktop, "Renamed.lnk"), destinationPath);
+    }
+
+    [TestMethod]
+    public void IsInteractiveUser_RejectsOverTheShoulderElevationIdentity()
+    {
+        Assert.IsFalse(ElevatedShortcutOperationRunner.IsInteractiveUser("S-1-5-21-admin", "S-1-5-21-user"));
+        Assert.IsFalse(ElevatedShortcutOperationRunner.IsInteractiveUser(null, "S-1-5-21-user"));
+        Assert.IsTrue(ElevatedShortcutOperationRunner.IsInteractiveUser("S-1-5-21-user", "S-1-5-21-user"));
+    }
+
     private static ElevatedShortcutOperationRequest CreateRequest()
     {
         return new ElevatedShortcutOperationRequest(

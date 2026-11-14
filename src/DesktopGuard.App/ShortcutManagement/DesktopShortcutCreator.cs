@@ -73,6 +73,7 @@ internal sealed class DesktopShortcutCreator
 
             EnsureEntryAbsent(stagingPath);
             _linkWriter.Create(stagingPath, Path.GetFullPath(targetPath));
+            ShortcutFileTransfer.SetHiddenAttribute(stagingPath, isHidden: false);
             ValidateRegularFile(stagingPath, stagingDirectory);
             byte[] contentHash = ComputeContentHash(stagingPath);
             contentHashPrepared(contentHash);

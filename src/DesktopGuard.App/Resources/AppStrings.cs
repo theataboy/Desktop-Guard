@@ -46,6 +46,37 @@ internal static class AppStrings
 
     public static string Approve => GetRequiredString(nameof(Approve));
 
+    public static string Rename => GetRequiredString(nameof(Rename));
+
+    public static string Delete => GetRequiredString(nameof(Delete));
+
+    public static string Properties => GetRequiredString(nameof(Properties));
+
+    public static string MakeVisible => GetRequiredString(nameof(MakeVisible));
+
+    public static string MoreShortcutActions => GetRequiredString(nameof(MoreShortcutActions));
+
+    public static string RenameShortcutTitle => GetRequiredString(nameof(RenameShortcutTitle));
+
+    public static string RenameShortcutPrompt => GetRequiredString(nameof(RenameShortcutPrompt));
+
+    public static string RenameShortcutExtensionLabel => GetRequiredString(nameof(RenameShortcutExtensionLabel));
+
+    public static string Renaming => GetRequiredString(nameof(Renaming));
+
+    public static string MovingToRecycleBin => GetRequiredString(nameof(MovingToRecycleBin));
+
+    public static string PermanentlyDeleting => GetRequiredString(nameof(PermanentlyDeleting));
+
+    public static string OpeningProperties => GetRequiredString(nameof(OpeningProperties));
+
+    public static string MakingShortcutVisible => GetRequiredString(nameof(MakingShortcutVisible));
+
+    public static string HiddenNameFormat(string name) => Format(nameof(HiddenNameFormat), name);
+
+    public static string PermanentDeleteConfirmationFormat(string name) =>
+        Format(nameof(PermanentDeleteConfirmationFormat), name);
+
     public static string Park => GetRequiredString(nameof(Park));
 
     public static string Restore => GetRequiredString(nameof(Restore));

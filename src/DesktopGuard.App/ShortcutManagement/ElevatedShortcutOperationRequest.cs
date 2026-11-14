@@ -7,6 +7,10 @@ internal enum ElevatedShortcutOperationKind
     MoveBetweenDesktops,
     ParkToRecovery,
     RestoreFromRecovery,
+    RenameShortcut,
+    DeleteToRecycleBin,
+    DeletePermanently,
+    MakeVisible,
 }
 
 internal sealed record ElevatedShortcutOperationRequest(
@@ -17,4 +21,5 @@ internal sealed record ElevatedShortcutOperationRequest(
     string Name,
     DesktopRootKind? SourceRootKind,
     DesktopRootKind? DestinationRootKind,
-    bool IsRetry = false);
+    bool IsRetry = false,
+    string? TargetName = null);

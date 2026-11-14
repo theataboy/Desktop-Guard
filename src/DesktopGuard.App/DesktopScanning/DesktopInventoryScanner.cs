@@ -150,7 +150,8 @@ internal sealed class DesktopInventoryScanner
             canonicalRoot,
             Path.GetFullPath(candidatePath),
             name,
-            DesktopEntryClassifier.Classify(name)));
+            DesktopEntryClassifier.Classify(name),
+            IsHidden: (attributes & FileAttributes.Hidden) != 0));
         return true;
     }
 

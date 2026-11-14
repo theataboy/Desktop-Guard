@@ -12,7 +12,7 @@ public sealed class ShortcutMoveExecutorTests
         RecordingElevationBroker broker = new();
         ShortcutMoveExecutor executor = new(
             broker,
-            (_, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
+            (_, _, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
         ElevatedShortcutOperationRequest request = CreateRequest();
 
         ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
@@ -34,7 +34,7 @@ public sealed class ShortcutMoveExecutorTests
         RecordingElevationBroker broker = new();
         ShortcutMoveExecutor executor = new(
             broker,
-            (_, _, _, _) => throw new IOException("sharing violation", unchecked((int)0x80070020)));
+            (_, _, _, _, _) => throw new IOException("sharing violation", unchecked((int)0x80070020)));
         ElevatedShortcutOperationRequest request = CreateRequest();
 
         IOException exception = await Assert.ThrowsAsync<IOException>(
@@ -55,7 +55,7 @@ public sealed class ShortcutMoveExecutorTests
         RecordingElevationBroker broker = new();
         ShortcutMoveExecutor executor = new(
             broker,
-            (_, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
+            (_, _, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
         ElevatedShortcutOperationRequest request = CreateRequest();
 
         await Assert.ThrowsAsync<ShortcutFileOperationException>(
@@ -100,6 +100,49 @@ public sealed class ShortcutMoveExecutorTests
 
         Assert.IsFalse(File.Exists(sourcePath));
         Assert.AreEqual("same shortcut bytes", File.ReadAllText(destinationPath));
+    }
+
+    [TestMethod]
+    public void ParkTransfer_PreservesHiddenAttributeInRecovery()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "Recovery", "source.lnk");
+        File.WriteAllText(sourcePath, "shortcut bytes");
+        File.SetAttributes(sourcePath, File.GetAttributes(sourcePath) | FileAttributes.Hidden);
+
+        ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid(), preserveHidden: true);
+
+        Assert.AreNotEqual((FileAttributes)0, File.GetAttributes(destinationPath) & FileAttributes.Hidden);
+    }
+
+    [TestMethod]
+    public void DesktopTransfer_ClearsHiddenAttributeWhenPublishingShortcut()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "Desktop", "source.lnk");
+        File.WriteAllText(sourcePath, "shortcut bytes");
+        File.SetAttributes(sourcePath, File.GetAttributes(sourcePath) | FileAttributes.Hidden);
+
+        ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid());
+
+        Assert.AreEqual((FileAttributes)0, File.GetAttributes(destinationPath) & FileAttributes.Hidden);
+    }
+
+    [TestMethod]
+    public void SetHiddenAttribute_ClearsOnlyHiddenAndLeavesFileWithValidAttributes()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string path = Path.Combine(temporaryDirectory.Path, "shortcut.lnk");
+        File.WriteAllText(path, "shortcut bytes");
+        File.SetAttributes(path, FileAttributes.Hidden);
+
+        ShortcutFileTransfer.SetHiddenAttribute(path, isHidden: false);
+
+        FileAttributes attributes = File.GetAttributes(path);
+        Assert.AreEqual((FileAttributes)0, attributes & FileAttributes.Hidden);
+        Assert.AreNotEqual((FileAttributes)0, attributes);
     }
 
     [TestMethod]

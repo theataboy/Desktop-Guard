@@ -73,6 +73,21 @@ public sealed class DesktopInventoryScannerTests
         Assert.AreEqual(DesktopScanIssueKind.RootUnavailable, result.Issues[0].Kind);
     }
 
+    [TestMethod]
+    public void Scan_ReportsHiddenAttributeForShortcut()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string userDesktopPath = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
+        string publicDesktopPath = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string hiddenShortcutPath = Path.Combine(userDesktopPath, "Hidden.lnk");
+        File.WriteAllText(hiddenShortcutPath, "opaque shortcut bytes");
+        File.SetAttributes(hiddenShortcutPath, File.GetAttributes(hiddenShortcutPath) | FileAttributes.Hidden);
+
+        DesktopScanResult result = CreateScanner(userDesktopPath, publicDesktopPath).Scan();
+
+        Assert.IsTrue(GetEntries(result).Single(entry => entry.Name == "Hidden.lnk").IsHidden);
+    }
+
     private static DesktopInventoryScanner CreateScanner(string userRootPath, string publicRootPath)
     {
         return new DesktopInventoryScanner(new FixedDesktopRootProvider(

@@ -89,6 +89,14 @@ public sealed class InventoryReconciler
                 bool isNew = !previouslyKnownPaths.Contains(entry.Path);
                 TrackedShortcut? activeShortcut = FindActiveShortcut(shortcuts, entry);
 
+                if (activeShortcut is not null
+                    && activeShortcut.Operation == ShortcutOperation.None
+                    && activeShortcut.IsHidden != entry.IsHidden)
+                {
+                    int shortcutIndex = shortcuts.FindIndex(shortcut => shortcut.Id == activeShortcut.Id);
+                    shortcuts[shortcutIndex] = activeShortcut with { IsHidden = entry.IsHidden };
+                }
+
                 if (isNew)
                 {
                     DesktopEvent desktopEvent = new(entry.Name, entry.Path, nowUtc);
@@ -166,7 +174,8 @@ public sealed class InventoryReconciler
             Status: status,
             StatusBeforeParking: null,
             Operation: ShortcutOperation.None,
-            RecoveryFolderId: null);
+            RecoveryFolderId: null,
+            IsHidden: entry.IsHidden);
     }
 
     private static TrackedShortcut? FindActiveShortcut(

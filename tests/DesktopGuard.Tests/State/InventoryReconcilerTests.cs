@@ -39,6 +39,31 @@ public sealed class InventoryReconcilerTests
     }
 
     [TestMethod]
+    public void Reconcile_UpdatesHiddenStateForTrackedShortcut()
+    {
+        string userRoot = CreateRootPath("hidden-shortcut");
+        DesktopInventoryEntry hiddenEntry = Entry(DesktopRootKind.User, userRoot, "Hidden.lnk", isHidden: true);
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true, hiddenEntry)]),
+            DateTimeOffset.UtcNow).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopInventorySnapshot visibleSnapshot = new(
+        [
+            Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Hidden.lnk", isHidden: false)),
+        ]);
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            baseline,
+            visibleSnapshot,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+
+        Assert.AreNotEqual(false, original.IsHidden);
+        Assert.IsFalse(result.State.Shortcuts.Single().IsHidden);
+    }
+
+    [TestMethod]
     public void Reconcile_NewUserAndPublicShortcutsArePendingAndAllNewEntriesAreLogged()
     {
         string userRoot = CreateRootPath("user");
@@ -282,14 +307,19 @@ public sealed class InventoryReconcilerTests
         return new DesktopRootSnapshot(kind, rootPath, complete, entries);
     }
 
-    private static DesktopInventoryEntry Entry(DesktopRootKind kind, string rootPath, string name)
+    private static DesktopInventoryEntry Entry(
+        DesktopRootKind kind,
+        string rootPath,
+        string name,
+        bool isHidden = false)
     {
         return new DesktopInventoryEntry(
             kind,
             rootPath,
             Path.Combine(rootPath, name),
             name,
-            DesktopEntryClassifier.Classify(name));
+            DesktopEntryClassifier.Classify(name),
+            IsHidden: isHidden);
     }
 
     private static DesktopEvent Event(string rootPath, string name, DateTimeOffset timestamp)
