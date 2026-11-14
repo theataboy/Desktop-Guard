@@ -13,6 +13,7 @@ DG is a least-privilege tool for detecting and explicitly managing desktop short
 - Filesystem watcher events and Windows notification activation data.
 - The current user's startup `Run` registry value and the path to the running DG executable.
 - The current user's Windows app-theme preference, used only to choose presentation colors.
+- Keyboard and pointer actions in the main window, including commands that rename or delete a selected shortcut.
 - Build dependencies and the published application folder.
 
 Treat all of these inputs as untrusted, including data read back from DG's own files.
@@ -37,6 +38,7 @@ Treat all of these inputs as untrusted, including data read back from DG's own f
 - Enable shortcut management only after a complete scan of the current user Desktop. An incomplete scan keeps existing decisions visible but disables file operations until a complete scan succeeds.
 - Keep the state file bounded to 4 MiB and write it to a temporary file before replacing the prior state. Reject oversized or malformed data without replacing the existing state.
 - Keep notification activation data to a validated opaque shortcut ID resolved against current local state. Never put raw paths into activation arguments. Sanitize and bound names shown in notification text, and show at most five notifications per scan.
+- Treat keyboard shortcuts as user input and route them through the same current-selection, state, and file-operation checks as the corresponding UI commands. **F2** and **Delete** act only on the selected shortcut while the list has focus and the action is enabled; Recovery deletion still requires confirmation, and key input never supplies a path or command.
 - Register only the DG-owned value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The command targets the current DG executable and includes the fixed `--background` argument only when the validated `StartMinimized` state setting is enabled; DG does not accept arbitrary commands from state or notification data.
 - Read only the current user's `AppsUseLightTheme` personalization value for UI colors. Treat it as untrusted presentation input, fall back to the light palette if it is unavailable, and let Windows high-contrast colors take precedence. It must not affect shortcut policy, persistence, or file operations.
 - Keep event records local and limited to file name, path, and timestamp for at most 90 days. Bound notification text and preserve recovery data separately from the event log.
@@ -50,7 +52,7 @@ Treat all of these inputs as untrusted, including data read back from DG's own f
 - Review security-related .NET analyzer diagnostics. Do not suppress one without recording why and what compensating control is used.
 - Before a release, restore with `--locked-mode`, run `dotnet package list --vulnerable --include-transitive`, and review every finding. Unresolved high or critical advisories block release unless a documented mitigation makes the affected code unreachable.
 - Automated security regression tests reject invalid and unknown notification activation IDs and verify that coalesced scan-request floods and simulated watcher errors trigger a full rescan. Actual Windows watcher overflow behavior remains a manual release check.
-- Automated file-operation tests must use temporary directories. Manually validate tray lifecycle, sign-in registration, Windows notification display and activation, watcher-error recovery, same-user and over-the-shoulder UAC, UAC cancellation/policy denial, ACL inheritance, rename, Properties for `.lnk` and `.url`, Hidden preservation and clearing, Recycle Bin behavior, confirmed permanent Recovery deletion, lock handling, and failure handling on Windows 11 before release.
+- Automated file-operation tests must use temporary directories. Manually validate tray lifecycle, sign-in registration, Windows notification display and activation, watcher-error recovery, same-user and over-the-shoulder UAC, UAC cancellation/policy denial, ACL inheritance, rename and Delete keyboard actions against the selected shortcut, Properties for `.lnk` and `.url`, Hidden preservation and clearing, Recycle Bin behavior, confirmed permanent Recovery deletion, lock handling, and failure handling on Windows 11 before release.
 
 ## References
 
