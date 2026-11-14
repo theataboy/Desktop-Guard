@@ -1,6 +1,7 @@
 using System.IO;
 using System.Security;
 using System.Text.Json;
+using DesktopGuard.Core.Shortcuts;
 using DesktopGuard.Core.State;
 
 namespace DesktopGuard.App.Persistence;
@@ -116,16 +117,17 @@ internal sealed class DesktopGuardStateStore : IDesktopGuardStateStore
 
             if (schemaVersion == 3 && DesktopStateValidator.IsValidVersionThree(state))
             {
-                return state with
-                {
-                    SchemaVersion = DesktopGuardState.CurrentSchemaVersion,
-                    StartMinimized = true,
-                };
+                return MigrateCreatingShortcuts(state with { StartMinimized = true });
             }
 
             if (schemaVersion == 4 && DesktopStateValidator.IsValidVersionFour(state))
             {
-                return state with { SchemaVersion = DesktopGuardState.CurrentSchemaVersion };
+                return MigrateCreatingShortcuts(state);
+            }
+
+            if (schemaVersion == 5 && DesktopStateValidator.IsValidVersionFive(state))
+            {
+                return MigrateCreatingShortcuts(state);
             }
 
             if (schemaVersion != DesktopGuardState.CurrentSchemaVersion || !DesktopStateValidator.IsValid(state))
@@ -287,6 +289,19 @@ internal sealed class DesktopGuardStateStore : IDesktopGuardStateStore
         }
 
         return Path.Combine(localAppData, "DesktopGuard");
+    }
+
+    private static DesktopGuardState MigrateCreatingShortcuts(DesktopGuardState state)
+    {
+        return state with
+        {
+            SchemaVersion = DesktopGuardState.CurrentSchemaVersion,
+            Shortcuts = state.Shortcuts
+                .Select(shortcut => shortcut.Operation == ShortcutOperation.Creating
+                    ? shortcut with { IsDesktopGuardShortcut = true }
+                    : shortcut)
+                .ToList(),
+        };
     }
 
     private static bool IsExpectedFileSystemException(Exception exception)

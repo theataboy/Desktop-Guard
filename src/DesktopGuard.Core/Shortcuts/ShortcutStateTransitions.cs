@@ -57,7 +57,8 @@ public static class ShortcutStateTransitions
             StatusBeforeParking: null,
             Operation: ShortcutOperation.Creating,
             RecoveryFolderId: null,
-            OperationId: Guid.NewGuid());
+            OperationId: Guid.NewGuid(),
+            IsDesktopGuardShortcut: true);
         return state with { Shortcuts = [.. state.Shortcuts, shortcut] };
     }
 
@@ -356,6 +357,7 @@ public static class ShortcutStateTransitions
         if (shortcut.Status is not (ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible)
             || shortcut.Operation != ShortcutOperation.None
             || shortcut.RootKind == targetRootKind
+            || (shortcut.IsDesktopGuardShortcut && targetRootKind == DesktopRootKind.Public)
             || !Enum.IsDefined(targetRootKind)
             || !Path.IsPathFullyQualified(targetRootPath))
         {
@@ -376,7 +378,8 @@ public static class ShortcutStateTransitions
         TrackedShortcut shortcut = Find(state, shortcutId);
         if (shortcut.Operation != ShortcutOperation.Moving
             || shortcut.TargetRootKind is not DesktopRootKind targetRootKind
-            || shortcut.TargetRootPath is null)
+            || shortcut.TargetRootPath is null
+            || (shortcut.IsDesktopGuardShortcut && targetRootKind == DesktopRootKind.Public))
         {
             throw new InvalidOperationException("No move operation is in progress for this shortcut.");
         }

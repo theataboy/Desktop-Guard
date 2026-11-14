@@ -151,11 +151,13 @@ public sealed class DesktopGuardStateStoreTests
     }
 
     [TestMethod]
-    public void Load_VersionFourStateAddsHiddenDefaultsWithoutChangingDecisions()
+    public void Load_VersionFourStateAddsDefaultsAndMarksInterruptedDesktopGuardCreation()
     {
         using TemporaryDirectory temporaryDirectory = new();
         string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
         string shortcutPath = Path.Combine(desktop, "Program.lnk");
+        string creatingPath = Path.Combine(desktop, "Desktop Guard.lnk");
+        Guid creatingOperationId = Guid.NewGuid();
         DesktopGuardState versionFour = new()
         {
             SchemaVersion = 4,
@@ -174,12 +176,26 @@ public sealed class DesktopGuardStateStoreTests
                     StatusBeforeParking: null,
                     Operation: ShortcutOperation.None,
                     RecoveryFolderId: null),
+                new TrackedShortcut(
+                    Guid.NewGuid(),
+                    DesktopRootKind.User,
+                    desktop,
+                    "Desktop Guard.lnk",
+                    creatingPath,
+                    ShortcutStatus.ApprovedVisible,
+                    StatusBeforeParking: null,
+                    Operation: ShortcutOperation.Creating,
+                    RecoveryFolderId: null,
+                    OperationId: creatingOperationId),
             ],
         };
         JsonObject legacyDocument = JsonSerializer.SerializeToNode(versionFour)!.AsObject();
-        JsonObject legacyShortcut = legacyDocument["Shortcuts"]!.AsArray().Single()!.AsObject();
-        legacyShortcut.Remove(nameof(TrackedShortcut.IsHidden));
-        legacyShortcut.Remove(nameof(TrackedShortcut.TargetName));
+        foreach (JsonObject legacyShortcut in legacyDocument["Shortcuts"]!.AsArray().Select(token => token!.AsObject()))
+        {
+            legacyShortcut.Remove(nameof(TrackedShortcut.IsHidden));
+            legacyShortcut.Remove(nameof(TrackedShortcut.TargetName));
+            legacyShortcut.Remove(nameof(TrackedShortcut.IsDesktopGuardShortcut));
+        }
         File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), legacyDocument.ToJsonString());
         DesktopGuardStateStore store = new(temporaryDirectory.Path);
 
@@ -188,9 +204,99 @@ public sealed class DesktopGuardStateStoreTests
         Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
         Assert.IsFalse(migrated.StartAtSignIn);
         Assert.IsFalse(migrated.StartMinimized);
-        Assert.AreEqual(ShortcutStatus.Pending, migrated.Shortcuts.Single().Status);
-        Assert.IsFalse(migrated.Shortcuts.Single().IsHidden);
+        TrackedShortcut migratedOrdinaryShortcut = migrated.Shortcuts.Single(shortcut => shortcut.Name == "Program.lnk");
+        Assert.AreEqual(ShortcutStatus.Pending, migratedOrdinaryShortcut.Status);
+        Assert.IsFalse(migratedOrdinaryShortcut.IsHidden);
+        Assert.IsFalse(migratedOrdinaryShortcut.IsDesktopGuardShortcut);
+        TrackedShortcut migratedCreation = migrated.Shortcuts.Single(shortcut => shortcut.Operation == ShortcutOperation.Creating);
+        Assert.IsTrue(migratedCreation.IsDesktopGuardShortcut);
+        Assert.AreEqual(creatingOperationId, migratedCreation.OperationId);
         Assert.AreEqual(shortcutPath, migrated.Roots.Single().KnownPaths.Single());
+        Assert.IsTrue(DesktopStateValidator.IsValid(migrated));
+    }
+
+    [TestMethod]
+    public void Load_VersionFiveMarksOnlyAnInterruptedDesktopGuardShortcutCreation()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string creatingPath = Path.Combine(desktop, "Desktop Guard.lnk");
+        Guid creatingOperationId = Guid.NewGuid();
+        DesktopGuardState versionFive = new()
+        {
+            SchemaVersion = 5,
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [])],
+            Shortcuts =
+            [
+                new TrackedShortcut(
+                    Guid.NewGuid(),
+                    DesktopRootKind.User,
+                    desktop,
+                    "Desktop Guard.lnk",
+                    creatingPath,
+                    ShortcutStatus.ApprovedVisible,
+                    StatusBeforeParking: null,
+                    Operation: ShortcutOperation.Creating,
+                    RecoveryFolderId: null,
+                    OperationId: creatingOperationId),
+            ],
+        };
+        JsonObject legacyDocument = JsonSerializer.SerializeToNode(versionFive)!.AsObject();
+        foreach (JsonObject shortcut in legacyDocument["Shortcuts"]!.AsArray().Select(token => token!.AsObject()))
+        {
+            shortcut.Remove(nameof(TrackedShortcut.IsDesktopGuardShortcut));
+        }
+
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), legacyDocument.ToJsonString());
+        DesktopGuardStateStore store = new(temporaryDirectory.Path);
+
+        DesktopGuardState migrated = store.Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        TrackedShortcut migratedCreation = migrated.Shortcuts.Single(shortcut => shortcut.Operation == ShortcutOperation.Creating);
+        Assert.IsTrue(migratedCreation.IsDesktopGuardShortcut);
+        Assert.AreEqual(creatingOperationId, migratedCreation.OperationId);
+        Assert.AreEqual(ShortcutStatus.ApprovedVisible, migratedCreation.Status);
+        Assert.IsTrue(DesktopStateValidator.IsValid(migrated));
+
+        store.Save(migrated);
+        DesktopGuardState reloaded = store.Load();
+        Assert.IsTrue(reloaded.Shortcuts.Single(shortcut => shortcut.Operation == ShortcutOperation.Creating).IsDesktopGuardShortcut);
+    }
+
+    [TestMethod]
+    public void Load_VersionFiveDoesNotInferDesktopGuardMarkerFromExistingName()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string shortcutPath = Path.Combine(desktop, "Desktop Guard.lnk");
+        DesktopGuardState versionFive = new()
+        {
+            SchemaVersion = 5,
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [shortcutPath])],
+            Shortcuts =
+            [
+                new TrackedShortcut(
+                    Guid.NewGuid(),
+                    DesktopRootKind.User,
+                    desktop,
+                    "Desktop Guard.lnk",
+                    shortcutPath,
+                    ShortcutStatus.ApprovedVisible,
+                    StatusBeforeParking: null,
+                    Operation: ShortcutOperation.None,
+                    RecoveryFolderId: null),
+            ],
+        };
+        JsonObject legacyDocument = JsonSerializer.SerializeToNode(versionFive)!.AsObject();
+        legacyDocument["Shortcuts"]!.AsArray().Single()!.AsObject().Remove(nameof(TrackedShortcut.IsDesktopGuardShortcut));
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), legacyDocument.ToJsonString());
+        DesktopGuardStateStore store = new(temporaryDirectory.Path);
+
+        DesktopGuardState migrated = store.Load();
+
+        Assert.IsFalse(migrated.Shortcuts.Single().IsDesktopGuardShortcut);
+        Assert.IsTrue(DesktopStateValidator.IsValid(migrated));
     }
 
     [TestMethod]

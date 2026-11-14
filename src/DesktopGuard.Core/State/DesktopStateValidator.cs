@@ -39,6 +39,11 @@ public static class DesktopStateValidator
         return IsValidForVersion(state, 4, legacyVersionOne: false, allowCreating: true, allowExtendedOperations: false);
     }
 
+    public static bool IsValidVersionFive(DesktopGuardState state)
+    {
+        return IsValidForVersion(state, 5, legacyVersionOne: false, allowCreating: true, allowExtendedOperations: true);
+    }
+
     private static bool IsValidForVersion(
         DesktopGuardState state,
         int schemaVersion,
@@ -66,7 +71,7 @@ public static class DesktopStateValidator
         }
 
         if (state.Shortcuts.Any(shortcut => shortcut is null
-                || !IsValidShortcut(shortcut, legacyVersionOne, allowCreating, allowExtendedOperations))
+                || !IsValidShortcut(shortcut, schemaVersion, legacyVersionOne, allowCreating, allowExtendedOperations))
             || state.Shortcuts.Select(shortcut => shortcut.Id).Distinct().Count() != state.Shortcuts.Count)
         {
             return false;
@@ -139,6 +144,7 @@ public static class DesktopStateValidator
 
     private static bool IsValidShortcut(
         TrackedShortcut shortcut,
+        int schemaVersion,
         bool legacyVersionOne,
         bool allowCreating,
         bool allowExtendedOperations)
@@ -185,6 +191,7 @@ public static class DesktopStateValidator
                 && shortcut.TargetRootKind is DesktopRootKind targetRootKind
                 && Enum.IsDefined(targetRootKind)
                 && targetRootKind != shortcut.RootKind
+                && (!shortcut.IsDesktopGuardShortcut || targetRootKind == DesktopRootKind.User)
                 && shortcut.OperationContentHash is null
                 && shortcut.TargetName is null
                 && IsBoundedAbsolutePath(shortcut.TargetRootPath)
@@ -250,6 +257,11 @@ public static class DesktopStateValidator
                     && shortcut.TargetRootPath is null
                     && shortcut.OperationId is null)
             && (!legacyVersionOne || shortcut.OperationContentHash is null)
+            && (schemaVersion >= DesktopGuardState.CurrentSchemaVersion || !shortcut.IsDesktopGuardShortcut)
+            && (!shortcut.IsDesktopGuardShortcut || shortcut.RootKind == DesktopRootKind.User)
+            && (schemaVersion < DesktopGuardState.CurrentSchemaVersion
+                || shortcut.Operation != ShortcutOperation.Creating
+                || shortcut.IsDesktopGuardShortcut)
             && (allowExtendedOperations || shortcut.TargetName is null)
             && shortcut.Status is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible or ShortcutStatus.Parked
             && previousStatusIsValid

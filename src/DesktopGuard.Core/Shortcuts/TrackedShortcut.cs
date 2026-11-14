@@ -17,4 +17,5 @@ public sealed record TrackedShortcut(
     Guid? OperationId = null,
     byte[]? OperationContentHash = null,
     string? TargetName = null,
-    bool IsHidden = false);
+    bool IsHidden = false,
+    bool IsDesktopGuardShortcut = false);

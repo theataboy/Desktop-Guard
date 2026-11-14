@@ -702,7 +702,8 @@ internal partial class MainForm : Form
         bool canMoveToUser = _canManage && noOperation && activeShortcut
             && selected?.RootKind == DesktopRootKind.Public;
         bool canMoveToPublic = _canManage && noOperation && activeShortcut
-            && selected?.RootKind == DesktopRootKind.User;
+            && selected?.RootKind == DesktopRootKind.User
+            && shortcut is { IsDesktopGuardShortcut: false };
         bool canRetry = _canManage && manageable && shortcut?.Operation != ShortcutOperation.None
             && shortcut is not null
             && _controller.IsOperationUnresolved(shortcut.Id);
