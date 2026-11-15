@@ -390,9 +390,6 @@ public static class ShortcutStateTransitions
             RootKind = targetRootKind,
             RootPath = shortcut.TargetRootPath,
             OriginalPath = targetPath,
-            Status = targetRootKind == DesktopRootKind.Public
-                ? ShortcutStatus.ApprovedVisible
-                : ShortcutStatus.Pending,
             StatusBeforeParking = null,
             Operation = ShortcutOperation.None,
             RecoveryFolderId = null,

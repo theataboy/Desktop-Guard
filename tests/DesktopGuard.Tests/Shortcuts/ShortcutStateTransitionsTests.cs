@@ -62,9 +62,12 @@ public sealed class ShortcutStateTransitionsTests
     }
 
     [TestMethod]
-    public void MoveBetweenDesktops_ChangesRootAndAppliesDestinationStatus()
+    public void MoveBetweenDesktops_PreservesApprovedStatus()
     {
-        TrackedShortcut shortcut = CreateShortcut(DesktopRootKind.User);
+        TrackedShortcut shortcut = CreateShortcut(DesktopRootKind.User) with
+        {
+            Status = ShortcutStatus.ApprovedVisible,
+        };
         string publicRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "DesktopGuard.Tests", "Public"));
         DesktopGuardState state = new()
         {
@@ -97,8 +100,33 @@ public sealed class ShortcutStateTransitionsTests
             shortcut.RootPath);
         DesktopGuardState movedUser = ShortcutStateTransitions.CompleteMove(movingToUser, shortcut.Id);
         Assert.AreEqual(DesktopRootKind.User, movedUser.Shortcuts.Single().RootKind);
-        Assert.AreEqual(ShortcutStatus.Pending, movedUser.Shortcuts.Single().Status);
+        Assert.AreEqual(ShortcutStatus.ApprovedVisible, movedUser.Shortcuts.Single().Status);
         Assert.IsTrue(DesktopStateValidator.IsValid(movedUser));
+    }
+
+    [TestMethod]
+    public void MoveBetweenDesktops_PreservesPendingStatus()
+    {
+        TrackedShortcut shortcut = CreateShortcut(DesktopRootKind.User);
+        string publicRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "DesktopGuard.Tests", "Public"));
+        DesktopGuardState state = new() { Shortcuts = [shortcut] };
+
+        DesktopGuardState movingToPublic = ShortcutStateTransitions.BeginMove(
+            state,
+            shortcut.Id,
+            DesktopRootKind.Public,
+            publicRoot);
+        DesktopGuardState movedPublic = ShortcutStateTransitions.CompleteMove(movingToPublic, shortcut.Id);
+        Assert.AreEqual(ShortcutStatus.Pending, movedPublic.Shortcuts.Single().Status);
+
+        DesktopGuardState movingToUser = ShortcutStateTransitions.BeginMove(
+            movedPublic,
+            shortcut.Id,
+            DesktopRootKind.User,
+            shortcut.RootPath);
+        DesktopGuardState movedUser = ShortcutStateTransitions.CompleteMove(movingToUser, shortcut.Id);
+
+        Assert.AreEqual(ShortcutStatus.Pending, movedUser.Shortcuts.Single().Status);
     }
 
     [TestMethod]

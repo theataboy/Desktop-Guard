@@ -82,7 +82,7 @@ public sealed class ShortcutFileManagerTests
     }
 
     [TestMethod]
-    public async Task MoveBetweenDesktops_UsesDestinationAndReturnsPendingFromPublic()
+    public async Task MoveBetweenDesktops_PreservesApprovedStatusFromPublic()
     {
         using TemporaryDirectory temporaryDirectory = new();
         string userDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
@@ -93,7 +93,10 @@ public sealed class ShortcutFileManagerTests
         const string contents = "opaque shortcut bytes";
         File.WriteAllText(publicPath, contents);
         ShortcutFileManager manager = CreateManager(userDesktop, publicDesktop, data);
-        TrackedShortcut shortcut = CreateShortcut(publicDesktop, "Shared.lnk", DesktopRootKind.Public);
+        TrackedShortcut shortcut = CreateShortcut(publicDesktop, "Shared.lnk", DesktopRootKind.Public) with
+        {
+            Status = ShortcutStatus.ApprovedVisible,
+        };
         DesktopGuardState baseline = StateWithRoots(shortcut, userDesktop, publicDesktop);
         DesktopGuardState movingToUser = ShortcutStateTransitions.BeginMove(
             baseline,
@@ -107,7 +110,7 @@ public sealed class ShortcutFileManagerTests
         Assert.IsFalse(File.Exists(publicPath));
         Assert.IsTrue(File.Exists(userPath));
         Assert.AreEqual(contents, File.ReadAllText(userPath));
-        Assert.AreEqual(ShortcutStatus.Pending, moved.Shortcuts.Single().Status);
+        Assert.AreEqual(ShortcutStatus.ApprovedVisible, moved.Shortcuts.Single().Status);
         Assert.AreEqual(DesktopRootKind.User, moved.Shortcuts.Single().RootKind);
     }
 

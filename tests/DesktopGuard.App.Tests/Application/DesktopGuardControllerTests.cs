@@ -159,7 +159,7 @@ public sealed class DesktopGuardControllerTests
     }
 
     [TestMethod]
-    public async Task PublicShortcuts_AreReviewableAndMoveBetweenRootsWithExpectedStatuses()
+    public async Task PublicShortcuts_AreReviewableAndMovesPreserveStatus()
     {
         using TemporaryDirectory temporaryDirectory = new();
         string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
@@ -210,7 +210,7 @@ public sealed class DesktopGuardControllerTests
         await controller.MoveAsync(userShortcut.Id, DesktopRootKind.User, CancellationToken.None);
         Assert.IsFalse(File.Exists(sharedPath));
         Assert.IsTrue(File.Exists(userShortcutPath));
-        Assert.AreEqual(ShortcutStatus.Pending, controller.State.Shortcuts.Single(
+        Assert.AreEqual(ShortcutStatus.ApprovedVisible, controller.State.Shortcuts.Single(
             shortcut => shortcut.Id == userShortcut.Id).Status);
     }
 
