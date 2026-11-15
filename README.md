@@ -46,6 +46,10 @@ Create the portable x64 ZIP with the self-contained executable, portable user gu
 
 The script restores in locked mode, publishes the self-contained compressed executable with the .NET and Windows App SDK runtimes, and packages `README.portable.md` as `README.md` in `artifacts/portable/DesktopGuard-win-x64.zip`. The executable is architecture-specific and runs without a separate .NET or Windows App SDK installation. Its bundled files are extracted to the user's `%TEMP%/.net` directory at startup, which increases first-start time. Before distributing a build, run `dotnet package list --vulnerable --include-transitive` and follow the manual Windows 11 release checklist in [SECURITY.md](SECURITY.md). Automated file-operation tests use temporary directories only.
 
+### Prepare a GitHub release
+
+After the workflow is on GitHub, push a version tag such as `v1.0.0`. GitHub Actions builds the portable ZIP on Windows and attaches it to a draft release. Complete the release checks in [SECURITY.md](SECURITY.md), review the draft, then publish it from GitHub. Each version tag must be new; the workflow fails if a release already exists for that tag and never replaces its assets. The temporary Actions artifact expires after one day. For private repositories, the workflow uses the repository's included Actions compute and storage quota; extra usage may be billed.
+
 ## Security
 
 DG's main process runs as the signed-in user without elevation or a service. A restricted one-operation helper can be launched through UAC only after Access Denied on an explicit file action. DG treats names, paths, saved state, filesystem events, and notification activation as untrusted. It inspects direct children only, never resolves or executes shortcut targets, and fails closed on ambiguous paths, incomplete scans, unsafe state, and move conflicts. See [SECURITY.md](SECURITY.md).
