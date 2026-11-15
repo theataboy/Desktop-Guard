@@ -1,5 +1,7 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security;
+using Microsoft.Win32.SafeHandles;
 
 namespace DesktopGuard.App.ShortcutManagement;
 
@@ -94,30 +96,38 @@ internal static class ShortcutFileTransfer
 {
     private const int BufferSize = 64 * 1024;
     private const string TemporaryFileName = "transfer.tmp";
+    private const uint GenericRead = 0x80000000;
+    private const uint DeleteAccess = 0x00010000;
+    private const uint ShareRead = 0x00000001;
+    private const uint OpenExisting = 3;
+    private const uint OpenReparsePoint = 0x00200000;
+    private const int FileDispositionInfo = 4;
+    private const int FileAttributeTagInfo = 9;
 
     public static void Move(
         string sourcePath,
         string destinationPath,
         Guid operationId,
         bool allowExistingDestination = false,
-        bool preserveHidden = false)
+        bool preserveHidden = false,
+        Action? beforeSourceDeletion = null)
     {
         if (operationId == Guid.Empty)
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
         }
 
-        ValidateRegularFile(sourcePath);
-        FileAttributes sourceAttributes = File.GetAttributes(sourcePath);
+        using FileStream source = OpenVerifiedFile(sourcePath, GenericRead | DeleteAccess, out FileAttributes sourceAttributes);
         string operationDirectory = GetOperationDirectory(destinationPath, operationId);
         if (File.Exists(destinationPath))
         {
+            using FileStream existingDestination = OpenComparisonFile(destinationPath);
             if ((allowExistingDestination || IsEmptyOperationDirectory(operationDirectory))
-                && File.Exists(sourcePath)
-                && FilesAreEqual(sourcePath, destinationPath))
+                && FilesAreEqual(source, existingDestination))
             {
                 UpdateHiddenAttribute(destinationPath, sourceAttributes, preserveHidden);
-                File.Delete(sourcePath);
+                beforeSourceDeletion?.Invoke();
+                DeleteSourceByHandle(source.SafeFileHandle);
                 DeleteEmptyOperationDirectory(destinationPath, operationId);
                 return;
             }
@@ -141,22 +151,30 @@ internal static class ShortcutFileTransfer
         File.SetAttributes(operationDirectory, directoryAttributes | FileAttributes.Hidden);
 
         string temporaryPath = Path.Combine(operationDirectory, TemporaryFileName);
-        CopyToNewFile(sourcePath, temporaryPath);
-        if (!FilesAreEqual(sourcePath, temporaryPath))
+        CopyToNewFile(source, temporaryPath);
+        using (FileStream temporary = OpenComparisonFile(temporaryPath))
         {
-            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
+            if (!FilesAreEqual(source, temporary))
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
+            }
         }
 
         UpdateHiddenAttribute(temporaryPath, sourceAttributes, preserveHidden);
 
         EnsureNoDestinationEntry(destinationPath);
         File.Move(temporaryPath, destinationPath);
-        if (!FilesAreEqual(sourcePath, destinationPath))
+        using (FileStream destination = OpenComparisonFile(destinationPath))
         {
-            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
+            if (!FilesAreEqual(source, destination))
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
+            }
+
+            beforeSourceDeletion?.Invoke();
+            DeleteSourceByHandle(source.SafeFileHandle);
         }
 
-        File.Delete(sourcePath);
         DeleteEmptyOperationDirectory(destinationPath, operationId);
     }
 
@@ -188,49 +206,37 @@ internal static class ShortcutFileTransfer
         return exception is IOException && errorCode is 32 or 33;
     }
 
-    public static bool FilesAreEqual(string firstPath, string secondPath)
+    private static bool FilesAreEqual(FileStream source, FileStream second)
     {
-        try
+        if (source.Length != second.Length)
         {
-            ValidateRegularFile(firstPath);
-            ValidateRegularFile(secondPath);
-            FileInfo firstInfo = new(firstPath);
-            FileInfo secondInfo = new(secondPath);
-            firstInfo.Refresh();
-            secondInfo.Refresh();
-            if (!firstInfo.Exists || !secondInfo.Exists || firstInfo.Length != secondInfo.Length)
+            return false;
+        }
+
+        source.Position = 0;
+        second.Position = 0;
+        byte[] firstBuffer = new byte[BufferSize];
+        byte[] secondBuffer = new byte[BufferSize];
+        while (true)
+        {
+            int firstRead = source.Read(firstBuffer, 0, firstBuffer.Length);
+            int secondRead = second.Read(secondBuffer, 0, secondBuffer.Length);
+            if (firstRead != secondRead
+                || !firstBuffer.AsSpan(0, firstRead).SequenceEqual(secondBuffer.AsSpan(0, secondRead)))
             {
                 return false;
             }
 
-            using FileStream first = new(firstPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            using FileStream second = new(secondPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            byte[] firstBuffer = new byte[BufferSize];
-            byte[] secondBuffer = new byte[BufferSize];
-            while (true)
+            if (firstRead == 0)
             {
-                int firstRead = first.Read(firstBuffer, 0, firstBuffer.Length);
-                int secondRead = second.Read(secondBuffer, 0, secondBuffer.Length);
-                if (firstRead != secondRead
-                    || !firstBuffer.AsSpan(0, firstRead).SequenceEqual(secondBuffer.AsSpan(0, secondRead)))
-                {
-                    return false;
-                }
-
-                if (firstRead == 0)
-                {
-                    return true;
-                }
+                return true;
             }
         }
-        catch (FileNotFoundException)
-        {
-            return false;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return false;
-        }
+    }
+
+    private static FileStream OpenComparisonFile(string path)
+    {
+        return OpenVerifiedFile(path, GenericRead, out _);
     }
 
     public static void CleanOperationTemporaryFiles(string destinationPath, Guid operationId)
@@ -308,17 +314,11 @@ internal static class ShortcutFileTransfer
         File.SetAttributes(path, attributes);
     }
 
-    private static void CopyToNewFile(string sourcePath, string temporaryPath)
+    private static void CopyToNewFile(FileStream source, string temporaryPath)
     {
         try
         {
-            using FileStream source = new(
-                sourcePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                BufferSize,
-                FileOptions.SequentialScan);
+            source.Position = 0;
             using FileStream destination = new(
                 temporaryPath,
                 FileMode.CreateNew,
@@ -334,6 +334,94 @@ internal static class ShortcutFileTransfer
             throw;
         }
     }
+
+    private static FileStream OpenVerifiedFile(string path, uint desiredAccess, out FileAttributes attributes)
+    {
+        SafeFileHandle handle = CreateFileW(
+            path,
+            desiredAccess,
+            ShareRead,
+            IntPtr.Zero,
+            OpenExisting,
+            OpenReparsePoint,
+            IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new IOException("The source shortcut could not be locked for transfer.",
+                unchecked((int)(0x80070000u | (uint)error)));
+        }
+
+        try
+        {
+            if (!GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInfo,
+                out FileAttributeTagInformation information,
+                (uint)Marshal.SizeOf<FileAttributeTagInformation>()))
+            {
+                throw new IOException("The shortcut attributes could not be checked.",
+                    unchecked((int)(0x80070000u | (uint)Marshal.GetLastWin32Error())));
+            }
+
+            attributes = information.Attributes;
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+            }
+
+            return new FileStream(handle, FileAccess.Read, BufferSize);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    private static void DeleteSourceByHandle(SafeFileHandle handle)
+    {
+        byte deleteFile = 1;
+        if (!SetFileInformationByHandle(handle, FileDispositionInfo, ref deleteFile, 1))
+        {
+            throw new IOException("The verified source shortcut could not be removed.",
+                unchecked((int)(0x80070000u | (uint)Marshal.GetLastWin32Error())));
+        }
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
+        SafeFileHandle fileHandle,
+        int fileInformationClass,
+        out FileAttributeTagInformation fileInformation,
+        uint bufferSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileAttributeTagInformation
+    {
+        public FileAttributes Attributes;
+        public uint ReparseTag;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(
+        SafeFileHandle fileHandle,
+        int fileInformationClass,
+        ref byte fileInformation,
+        uint bufferSize);
 
     private static void EnsureNoDestinationEntry(string destinationPath)
     {

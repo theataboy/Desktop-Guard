@@ -245,6 +245,21 @@ public sealed class ShortcutStateTransitionsTests
     }
 
     [TestMethod]
+    public void Rename_CaseOnlyChangeRemainsAValidPendingOperation()
+    {
+        DesktopGuardState initial = StateWithShortcut(ShortcutStatus.ApprovedVisible);
+        TrackedShortcut original = initial.Shortcuts.Single();
+        string targetName = original.Name.ToUpperInvariant();
+
+        DesktopGuardState pending = ShortcutStateTransitions.BeginRename(initial, original.Id, targetName);
+
+        Assert.IsTrue(DesktopStateValidator.IsValid(pending));
+        DesktopGuardState completed = ShortcutStateTransitions.CompleteRename(pending, original.Id);
+        Assert.AreEqual(targetName, completed.Shortcuts.Single().Name);
+        Assert.IsTrue(DesktopStateValidator.IsValid(completed));
+    }
+
+    [TestMethod]
     public void Rename_ParkedShortcutDoesNotRewriteReplacementPathInDesktopCheckpoint()
     {
         TrackedShortcut parked = CreateShortcut(DesktopRootKind.User) with

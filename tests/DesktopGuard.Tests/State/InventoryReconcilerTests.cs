@@ -64,6 +64,43 @@ public sealed class InventoryReconcilerTests
     }
 
     [TestMethod]
+    public void Reconcile_ExternalCaseOnlyRenameKeepsDecisionAndUpdatesExactName()
+    {
+        string userRoot = CreateRootPath("case-only-rename");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot(
+            [
+                Root(DesktopRootKind.User, userRoot, complete: true,
+                    Entry(DesktopRootKind.User, userRoot, "Program.lnk")),
+            ]),
+            now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single() with { Status = ShortcutStatus.Pending };
+        baseline = baseline with { Shortcuts = [original] };
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            baseline,
+            new DesktopInventorySnapshot(
+            [
+                Root(DesktopRootKind.User, userRoot, complete: true,
+                    Entry(DesktopRootKind.User, userRoot, "PROGRAM.lnk")),
+            ]),
+            now.AddMinutes(1));
+
+        TrackedShortcut updated = result.State.Shortcuts.Single();
+        Assert.AreEqual(original.Id, updated.Id);
+        Assert.AreEqual(ShortcutStatus.Pending, updated.Status);
+        Assert.AreEqual("PROGRAM.lnk", updated.Name);
+        Assert.AreEqual(Path.Combine(userRoot, "PROGRAM.lnk"), updated.OriginalPath);
+        Assert.IsEmpty(result.NewEvents);
+        Assert.IsEmpty(result.NewUserShortcuts);
+        Assert.IsTrue(DesktopStateValidator.IsValid(result.State));
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(result.State, updated.Id, "program.lnk");
+        Assert.IsTrue(DesktopStateValidator.IsValid(renaming));
+    }
+
+    [TestMethod]
     public void Reconcile_NewUserAndPublicShortcutsArePendingAndAllNewEntriesAreLogged()
     {
         string userRoot = CreateRootPath("user");

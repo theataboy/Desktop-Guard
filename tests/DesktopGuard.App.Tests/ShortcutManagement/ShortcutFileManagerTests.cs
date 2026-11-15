@@ -145,6 +145,38 @@ public sealed class ShortcutFileManagerTests
     }
 
     [TestMethod]
+    public async Task Rename_CaseOnlyChangeCanBeRecoveredAfterTheMove()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.lnk");
+        File.WriteAllText(sourcePath, "shortcut bytes");
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk");
+        DesktopGuardState pending = ShortcutStateTransitions.BeginRename(
+            new DesktopGuardState
+            {
+                Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [sourcePath])],
+                Shortcuts = [shortcut],
+            },
+            shortcut.Id,
+            "PROGRAM.lnk");
+        ShortcutFileManager manager = CreateManager(desktop, data, new LocalShortcutActionExecutor());
+
+        Assert.AreEqual(PendingOperationResolution.OperationDidNotMoveFile,
+            manager.ResolveInterruptedOperation(pending.Shortcuts.Single()));
+        manager.EnsureRenameDestinationAvailable(shortcut, "PROGRAM.lnk");
+        await manager.RenameAsync(pending.Shortcuts.Single(), CancellationToken.None);
+
+        Assert.AreEqual("PROGRAM.lnk", Path.GetFileName(Directory.GetFiles(desktop).Single()));
+        Assert.AreEqual(PendingOperationResolution.OperationMovedFile,
+            manager.ResolveInterruptedOperation(pending.Shortcuts.Single()));
+        await manager.RetryPendingOperationAsync(pending.Shortcuts.Single(), CancellationToken.None);
+        DesktopGuardState completed = ShortcutStateTransitions.CompleteRename(pending, shortcut.Id);
+        Assert.IsTrue(DesktopStateValidator.IsValid(completed));
+    }
+
+    [TestMethod]
     public async Task Rename_ParkedShortcutRenamesOnlyItsRecoveryFile()
     {
         using TemporaryDirectory temporaryDirectory = new();
@@ -169,6 +201,35 @@ public sealed class ShortcutFileManagerTests
         Assert.IsFalse(File.Exists(originalRecoveryPath));
         Assert.AreEqual("shortcut bytes", File.ReadAllText(manager.GetRecoveryFilePath(renamed)));
         Assert.IsFalse(File.Exists(Path.Combine(desktop, "Archive.lnk")));
+    }
+
+    [TestMethod]
+    public async Task Rename_ParkedShortcutSupportsCaseOnlyChange()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.lnk");
+        File.WriteAllText(sourcePath, "shortcut bytes");
+        ShortcutFileManager manager = CreateManager(desktop, data, new LocalShortcutActionExecutor());
+        TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk");
+        DesktopGuardState parking = ShortcutStateTransitions.BeginParking(
+            new DesktopGuardState
+            {
+                Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [sourcePath])],
+                Shortcuts = [shortcut],
+            }, shortcut.Id, Guid.NewGuid());
+        await manager.ParkAsync(parking.Shortcuts.Single(), CancellationToken.None);
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(parking, shortcut.Id);
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(parked, shortcut.Id, "PROGRAM.lnk");
+
+        await manager.RenameAsync(renaming.Shortcuts.Single(), CancellationToken.None);
+
+        string recoveryFolder = Path.GetDirectoryName(manager.GetRecoveryFilePath(renaming.Shortcuts.Single()))!;
+        Assert.AreEqual("PROGRAM.lnk", Path.GetFileName(Directory.GetFiles(recoveryFolder).Single()));
+        Assert.AreEqual(PendingOperationResolution.OperationMovedFile,
+            manager.ResolveInterruptedOperation(renaming.Shortcuts.Single()));
+        Assert.IsTrue(DesktopStateValidator.IsValid(ShortcutStateTransitions.CompleteRename(renaming, shortcut.Id)));
     }
 
     [TestMethod]

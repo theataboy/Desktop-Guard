@@ -77,6 +77,7 @@ public sealed class ElevatedShortcutOperationRunnerTests
         };
 
         Assert.IsTrue(ElevatedShortcutOperationRunner.IsValidRequest(valid));
+        Assert.IsTrue(ElevatedShortcutOperationRunner.IsValidRequest(valid with { TargetName = "PROGRAM.LNK" }));
         Assert.IsFalse(ElevatedShortcutOperationRunner.IsValidRequest(valid with { TargetName = "Renamed.url" }));
         Assert.IsFalse(ElevatedShortcutOperationRunner.IsValidRequest(valid with { TargetName = "..\\Renamed.lnk" }));
     }

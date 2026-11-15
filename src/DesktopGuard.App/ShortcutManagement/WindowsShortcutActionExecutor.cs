@@ -23,7 +23,13 @@ internal sealed class WindowsShortcutActionExecutor : IShortcutActionExecutor
             () => File.Move(sourcePath, destinationPath),
             request,
             cancellationToken,
-            () => ShortcutFileTransfer.ValidateCompletedMove(sourcePath, destinationPath));
+            () =>
+            {
+                if (!string.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    ShortcutFileTransfer.ValidateCompletedMove(sourcePath, destinationPath);
+                }
+            });
     }
 
     public Task DeleteToRecycleBinAsync(

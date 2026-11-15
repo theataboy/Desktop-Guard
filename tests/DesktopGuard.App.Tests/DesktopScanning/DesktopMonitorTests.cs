@@ -51,6 +51,7 @@ public sealed class DesktopMonitorTests
         TaskCompletionSource<bool> firstScanStarted = NewSignal();
         TaskCompletionSource<bool> releaseFirstScan = NewSignal();
         TaskCompletionSource<bool> secondScanCompleted = NewSignal();
+        TaskCompletionSource<bool> thirdScanCompleted = NewSignal();
         int scanCount = 0;
         using DesktopMonitor monitor = new(rootProvider, async cancellationToken =>
         {
@@ -64,11 +65,16 @@ public sealed class DesktopMonitorTests
             {
                 secondScanCompleted.TrySetResult(true);
             }
+            else if (currentCount == 3)
+            {
+                thirdScanCompleted.TrySetResult(true);
+            }
         });
 
         monitor.Start();
         await firstScanStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        monitor.OnWatcherError(monitor, new ErrorEventArgs(new IOException("Simulated watcher overflow.")));
+        FileSystemWatcher failedWatcher = monitor.GetWatcher(DesktopRootKind.User)!;
+        monitor.OnWatcherError(failedWatcher, new ErrorEventArgs(new IOException("Simulated watcher overflow.")));
         releaseFirstScan.TrySetResult(true);
         await secondScanCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await Task.Delay(TimeSpan.FromMilliseconds(400));
@@ -78,6 +84,9 @@ public sealed class DesktopMonitorTests
             3,
             rootProvider.GetRootsCount,
             "The watcher roots should be re-read after the watcher error.");
+        Assert.AreNotSame(failedWatcher, monitor.GetWatcher(DesktopRootKind.User));
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "UserDesktop", "new.lnk"), "shortcut");
+        await thirdScanCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     private static CountingDesktopRootProvider CreateRootProvider(string temporaryPath)

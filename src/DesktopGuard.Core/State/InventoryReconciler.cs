@@ -91,10 +91,17 @@ public sealed class InventoryReconciler
 
                 if (activeShortcut is not null
                     && activeShortcut.Operation == ShortcutOperation.None
-                    && activeShortcut.IsHidden != entry.IsHidden)
+                    && (activeShortcut.IsHidden != entry.IsHidden
+                        || !string.Equals(activeShortcut.Name, entry.Name, StringComparison.Ordinal)
+                        || !string.Equals(activeShortcut.OriginalPath, entry.Path, StringComparison.Ordinal)))
                 {
                     int shortcutIndex = shortcuts.FindIndex(shortcut => shortcut.Id == activeShortcut.Id);
-                    shortcuts[shortcutIndex] = activeShortcut with { IsHidden = entry.IsHidden };
+                    shortcuts[shortcutIndex] = activeShortcut with
+                    {
+                        Name = entry.Name,
+                        OriginalPath = entry.Path,
+                        IsHidden = entry.IsHidden,
+                    };
                 }
 
                 if (isNew)

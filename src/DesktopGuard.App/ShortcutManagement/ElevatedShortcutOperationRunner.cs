@@ -165,7 +165,7 @@ internal static class ElevatedShortcutOperationRunner
                 && string.Equals(Path.GetFileName(targetName), targetName, StringComparison.Ordinal)
                 && DesktopEntryClassifier.Classify(targetName) == DesktopEntryKind.Shortcut
                 && string.Equals(Path.GetExtension(request.Name), Path.GetExtension(targetName), StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(request.Name, targetName, StringComparison.OrdinalIgnoreCase),
+                && !string.Equals(request.Name, targetName, StringComparison.Ordinal),
             ElevatedShortcutOperationKind.DeleteToRecycleBin =>
                 request.RecoveryFolderId is null
                 && request.SourceRootKind is DesktopRootKind deleteRoot

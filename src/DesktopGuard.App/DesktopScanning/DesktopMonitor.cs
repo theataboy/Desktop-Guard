@@ -19,6 +19,7 @@ internal sealed class DesktopMonitor : IDisposable
         SingleWriter = false,
     });
     private readonly Dictionary<DesktopRootKind, (string Path, FileSystemWatcher Watcher)> _watchers = [];
+    private readonly HashSet<DesktopRootKind> _failedWatchers = [];
     private readonly CancellationTokenSource _shutdown = new();
     private System.Threading.Timer? _periodicScanTimer;
     private Task? _worker;
@@ -36,6 +37,14 @@ internal sealed class DesktopMonitor : IDisposable
     public event Action<Exception>? ScanFailed;
 
     public event Action<DesktopRootKind>? WatchFailed;
+
+    internal FileSystemWatcher? GetWatcher(DesktopRootKind kind)
+    {
+        lock (_watcherGate)
+        {
+            return _watchers.TryGetValue(kind, out var current) ? current.Watcher : null;
+        }
+    }
 
     public void Start()
     {
@@ -175,8 +184,10 @@ internal sealed class DesktopMonitor : IDisposable
                 }
 
                 retainedRoots.Add(root.Kind);
+                bool failed = _failedWatchers.Remove(root.Kind);
                 if (_watchers.TryGetValue(root.Kind, out (string Path, FileSystemWatcher Watcher) current)
-                    && PathsEqual(current.Path, canonicalPath))
+                    && PathsEqual(current.Path, canonicalPath)
+                    && !failed)
                 {
                     continue;
                 }
@@ -242,6 +253,22 @@ internal sealed class DesktopMonitor : IDisposable
 
     internal void OnWatcherError(object sender, ErrorEventArgs args)
     {
+        lock (_watcherGate)
+        {
+            DesktopRootKind? failedKind = _watchers
+                .Where(item => ReferenceEquals(item.Value.Watcher, sender))
+                .Select(item => (DesktopRootKind?)item.Key)
+                .FirstOrDefault();
+            if (failedKind is DesktopRootKind kind)
+            {
+                _failedWatchers.Add(kind);
+            }
+            else
+            {
+                _failedWatchers.UnionWith(_watchers.Keys);
+            }
+        }
+
         Interlocked.Exchange(ref _watchersNeedRefresh, 1);
         RequestScan();
     }

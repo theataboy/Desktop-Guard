@@ -151,7 +151,7 @@ internal partial class MainForm : Form
             || string.Equals(
                 dialog.BaseName,
                 Path.GetFileNameWithoutExtension(shortcut.Name),
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.Ordinal))
         {
             return;
         }

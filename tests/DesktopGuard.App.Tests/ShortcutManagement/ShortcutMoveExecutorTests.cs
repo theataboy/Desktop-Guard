@@ -103,6 +103,62 @@ public sealed class ShortcutMoveExecutorTests
     }
 
     [TestMethod]
+    public void RetryMove_ReparseDestinationNeverRemovesTheSource()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "destination.lnk");
+        string targetPath = Path.Combine(temporaryDirectory.Path, "target.lnk");
+        File.WriteAllText(sourcePath, "same shortcut bytes");
+        File.WriteAllText(targetPath, "same shortcut bytes");
+        try
+        {
+            File.CreateSymbolicLink(destinationPath, targetPath);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException
+            || exception is IOException && (exception.HResult & 0xFFFF) == 1314)
+        {
+            Assert.Inconclusive("Creating a test symbolic link requires Windows Developer Mode or link privileges.");
+        }
+
+        ShortcutFileOperationException failure = Assert.Throws<ShortcutFileOperationException>(() =>
+            ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid(), allowExistingDestination: true));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.InvalidPath, failure.Failure);
+        Assert.AreEqual("same shortcut bytes", File.ReadAllText(sourcePath));
+        Assert.AreNotEqual((FileAttributes)0, File.GetAttributes(destinationPath) & FileAttributes.ReparsePoint);
+        Assert.AreEqual("same shortcut bytes", File.ReadAllText(targetPath));
+    }
+
+    [TestMethod]
+    public void Move_SourceAndDestinationCannotBeReplacedBeforeVerifiedSourceIsRemoved()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "destination.lnk");
+        File.WriteAllText(sourcePath, "original shortcut bytes");
+        bool sourceWasProtected = false;
+        bool destinationWasProtected = false;
+
+        ShortcutFileTransfer.Move(
+            sourcePath,
+            destinationPath,
+            Guid.NewGuid(),
+            beforeSourceDeletion: () =>
+            {
+                sourceWasProtected = Assert.Throws<IOException>(() =>
+                    File.Move(sourcePath, Path.Combine(temporaryDirectory.Path, "replacement.lnk"))) is not null;
+                destinationWasProtected = Assert.Throws<IOException>(() =>
+                    File.Move(destinationPath, Path.Combine(temporaryDirectory.Path, "other.lnk"))) is not null;
+            });
+
+        Assert.IsTrue(sourceWasProtected);
+        Assert.IsTrue(destinationWasProtected);
+        Assert.IsFalse(File.Exists(sourcePath));
+        Assert.AreEqual("original shortcut bytes", File.ReadAllText(destinationPath));
+    }
+
+    [TestMethod]
     public void ParkTransfer_PreservesHiddenAttributeInRecovery()
     {
         using TemporaryDirectory temporaryDirectory = new();

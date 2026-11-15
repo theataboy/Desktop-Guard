@@ -129,7 +129,7 @@ internal sealed class ShortcutFileManager
                 Path.GetExtension(shortcut.Name),
                 Path.GetExtension(targetName),
                 StringComparison.OrdinalIgnoreCase)
-            || PathsEqual(shortcut.Name, targetName))
+            || string.Equals(shortcut.Name, targetName, StringComparison.Ordinal))
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
         }
@@ -137,7 +137,18 @@ internal sealed class ShortcutFileManager
         string sourcePath = GetTrackedShortcutPath(shortcut);
         string root = Path.GetDirectoryName(sourcePath)
             ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
-        EnsureNoDestinationEntry(BuildDesktopPath(root, targetName));
+        if (IsCaseOnlyRename(shortcut.Name, targetName))
+        {
+            if (ResolveCaseOnlyRename(root, shortcut.Name, targetName)
+                != PendingOperationResolution.OperationDidNotMoveFile)
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.DestinationConflict);
+            }
+        }
+        else
+        {
+            EnsureNoDestinationEntry(BuildDesktopPath(root, targetName));
+        }
     }
 
     public bool IsHidden(TrackedShortcut shortcut)
@@ -318,8 +329,23 @@ internal sealed class ShortcutFileManager
         string sourceRoot = Path.GetDirectoryName(sourcePath)
             ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
         string destinationPath = BuildDesktopPath(sourceRoot, shortcut.TargetName!);
+        bool caseOnlyRename = IsCaseOnlyRename(shortcut.Name, shortcut.TargetName!);
+        if (caseOnlyRename)
+        {
+            PendingOperationResolution current = ResolveCaseOnlyRename(sourceRoot, shortcut.Name, shortcut.TargetName!);
+            if (allowExistingDestination && current == PendingOperationResolution.OperationMovedFile)
+            {
+                return;
+            }
+
+            if (current != PendingOperationResolution.OperationDidNotMoveFile)
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AmbiguousRecovery);
+            }
+        }
+
         bool sourceExists = HasSafeFile(sourcePath, sourceRoot);
-        bool destinationExists = HasSafeFile(destinationPath, sourceRoot);
+        bool destinationExists = !caseOnlyRename && HasSafeFile(destinationPath, sourceRoot);
         if (allowExistingDestination && !sourceExists && destinationExists)
         {
             return;
@@ -335,7 +361,10 @@ internal sealed class ShortcutFileManager
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.DestinationConflict);
         }
 
-        EnsureNoDestinationEntry(destinationPath);
+        if (!caseOnlyRename)
+        {
+            EnsureNoDestinationEntry(destinationPath);
+        }
         ElevatedShortcutOperationRequest request = CreateActionRequest(
             ElevatedShortcutOperationKind.RenameShortcut,
             shortcut,
@@ -344,7 +373,10 @@ internal sealed class ShortcutFileManager
         await _actionExecutor.RenameAsync(sourcePath, destinationPath, request, cancellationToken)
             .ConfigureAwait(false);
         ValidateRegularFile(destinationPath, sourceRoot);
-        if (HasSafeFile(sourcePath, sourceRoot))
+        if (caseOnlyRename
+            ? ResolveCaseOnlyRename(sourceRoot, shortcut.Name, shortcut.TargetName!)
+                != PendingOperationResolution.OperationMovedFile
+            : HasSafeFile(sourcePath, sourceRoot))
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AmbiguousRecovery);
         }
@@ -409,6 +441,11 @@ internal sealed class ShortcutFileManager
             string root = Path.GetDirectoryName(sourcePath)
                 ?? throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
             string destinationPath = BuildDesktopPath(root, shortcut.TargetName);
+            if (IsCaseOnlyRename(shortcut.Name, shortcut.TargetName))
+            {
+                return ResolveCaseOnlyRename(root, shortcut.Name, shortcut.TargetName);
+            }
+
             bool sourceExists = HasSafeFile(sourcePath, root);
             bool destinationExists = HasSafeFile(destinationPath, root);
             if (sourceExists && !destinationExists)
@@ -810,7 +847,7 @@ internal sealed class ShortcutFileManager
                 Path.GetExtension(shortcut.Name),
                 Path.GetExtension(shortcut.TargetName),
                 StringComparison.OrdinalIgnoreCase)
-            || PathsEqual(shortcut.Name, shortcut.TargetName))
+            || string.Equals(shortcut.Name, shortcut.TargetName, StringComparison.Ordinal))
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
         }
@@ -1139,6 +1176,42 @@ internal sealed class ShortcutFileManager
         return DesktopCandidatePolicy.IsValidWindowsFileName(name)
             && string.Equals(Path.GetFileName(name), name, StringComparison.Ordinal)
             && DesktopEntryClassifier.Classify(name) == DesktopEntryKind.Shortcut;
+    }
+
+    private static bool IsCaseOnlyRename(string sourceName, string targetName)
+    {
+        return !string.Equals(sourceName, targetName, StringComparison.Ordinal)
+            && string.Equals(sourceName, targetName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static PendingOperationResolution ResolveCaseOnlyRename(
+        string directory,
+        string sourceName,
+        string targetName)
+    {
+        try
+        {
+            string[] matches = Directory.EnumerateFileSystemEntries(directory)
+                .Where(path => string.Equals(Path.GetFileName(path), sourceName, StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToArray();
+            if (matches.Length != 1)
+            {
+                return PendingOperationResolution.Ambiguous;
+            }
+
+            ValidateRegularFile(matches[0], directory);
+            string actualName = Path.GetFileName(matches[0]);
+            return string.Equals(actualName, sourceName, StringComparison.Ordinal)
+                ? PendingOperationResolution.OperationDidNotMoveFile
+                : string.Equals(actualName, targetName, StringComparison.Ordinal)
+                    ? PendingOperationResolution.OperationMovedFile
+                    : PendingOperationResolution.Ambiguous;
+        }
+        catch (Exception exception) when (IsExpectedFileSystemException(exception))
+        {
+            throw MapFileSystemFailure(exception, ShortcutFileOperationFailure.AmbiguousRecovery);
+        }
     }
 
     private static bool PathsEqual(string left, string right)

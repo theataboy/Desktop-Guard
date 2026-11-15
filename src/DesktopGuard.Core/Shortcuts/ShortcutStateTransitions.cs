@@ -135,7 +135,7 @@ public static class ShortcutStateTransitions
         if (shortcut.Operation != ShortcutOperation.None
             || !IsValidName(targetName)
             || !string.Equals(Path.GetExtension(shortcut.Name), Path.GetExtension(targetName), StringComparison.OrdinalIgnoreCase)
-            || PathsEqual(shortcut.Name, targetName))
+            || string.Equals(shortcut.Name, targetName, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("This shortcut cannot be renamed in its current state.");
         }

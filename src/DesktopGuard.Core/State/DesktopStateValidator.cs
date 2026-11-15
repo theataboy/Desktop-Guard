@@ -222,7 +222,7 @@ public static class DesktopStateValidator
                     Path.GetExtension(shortcut.Name),
                     Path.GetExtension(shortcut.TargetName),
                     StringComparison.OrdinalIgnoreCase)
-                && !PathsEqual(shortcut.Name, shortcut.TargetName!)
+                && !string.Equals(shortcut.Name, shortcut.TargetName, StringComparison.Ordinal)
                 && isParked == hasRecoveryFolder
                 && isParked == (shortcut.StatusBeforeParking is not null),
             ShortcutOperation.DeletingToRecycleBin => allowExtendedOperations
