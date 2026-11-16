@@ -215,6 +215,41 @@ public sealed class DesktopGuardControllerTests
     }
 
     [TestMethod]
+    public async Task Move_WhenDestinationAppearsAfterScanLeavesNoStuckOperation()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.lnk");
+        string destinationPath = Path.Combine(publicDesktop, "Program.lnk");
+        File.WriteAllText(sourcePath, "source shortcut");
+
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero),
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        TrackedShortcut shortcut = controller.State.Shortcuts.Single();
+        File.WriteAllText(destinationPath, "existing destination");
+
+        ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => controller.MoveAsync(shortcut.Id, DesktopRootKind.Public, CancellationToken.None));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.DestinationConflict, exception.Failure);
+        Assert.AreEqual(ShortcutOperation.None, controller.State.Shortcuts.Single().Operation);
+        Assert.IsTrue(File.Exists(sourcePath));
+        Assert.AreEqual("existing destination", File.ReadAllText(destinationPath));
+        Assert.IsFalse(controller.IsOperationUnresolved(shortcut.Id));
+    }
+
+    [TestMethod]
     public async Task AddDesktopShortcut_CreatesApprovedLinkAndRecordsItInTheBaseline()
     {
         using TemporaryDirectory temporaryDirectory = new();

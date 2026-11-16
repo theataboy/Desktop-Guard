@@ -82,10 +82,24 @@ public sealed class InventoryReconciler
             }
 
             HashSet<string> previouslyKnownPaths = existingRoot!.KnownPaths.ToHashSet(GetPathComparer());
-            HashSet<string> currentPaths = currentEntries.Select(entry => entry.Path).ToHashSet(GetPathComparer());
+            HashSet<string> deferredOperationTargets = currentEntries
+                .Where(entry => !previouslyKnownPaths.Contains(entry.Path)
+                    && IsUnresolvedOperationTarget(shortcuts, entry))
+                .Select(entry => entry.Path)
+                .ToHashSet(GetPathComparer());
+            HashSet<string> currentPaths = currentEntries
+                .Where(entry => !deferredOperationTargets.Contains(entry.Path))
+                .Select(entry => entry.Path)
+                .ToHashSet(GetPathComparer());
 
             foreach (DesktopInventoryEntry entry in currentEntries)
             {
+                if (deferredOperationTargets.Contains(entry.Path))
+                {
+                    // An unresolved operation may own this file. Do not baseline or approve it yet.
+                    continue;
+                }
+
                 bool isNew = !previouslyKnownPaths.Contains(entry.Path);
                 TrackedShortcut? activeShortcut = FindActiveShortcut(shortcuts, entry);
 
@@ -190,14 +204,42 @@ public sealed class InventoryReconciler
         DesktopInventoryEntry entry)
     {
         return shortcuts.FirstOrDefault(shortcut =>
-            shortcut.Status != ShortcutStatus.Parked
-                && shortcut.RootKind == entry.RootKind
+            shortcut.RootKind == entry.RootKind
                 && PathsEqual(shortcut.RootPath, entry.RootPath)
-                && PathsEqual(shortcut.OriginalPath, entry.Path)
+                && (PathsEqual(shortcut.OriginalPath, entry.Path)
+                        && (shortcut.Status != ShortcutStatus.Parked
+                            || shortcut.Operation == ShortcutOperation.Restoring)
+                    || shortcut.Operation == ShortcutOperation.Renaming
+                        && shortcut.Status != ShortcutStatus.Parked
+                        && PathsEqual(
+                            Path.Combine(shortcut.RootPath, shortcut.TargetName!),
+                            entry.Path))
             || shortcut.Operation == ShortcutOperation.Moving
                 && shortcut.TargetRootKind == entry.RootKind
                 && PathsEqual(shortcut.TargetRootPath!, entry.RootPath)
                 && PathsEqual(Path.Combine(shortcut.TargetRootPath!, shortcut.Name), entry.Path));
+    }
+
+    private static bool IsUnresolvedOperationTarget(
+        IEnumerable<TrackedShortcut> shortcuts,
+        DesktopInventoryEntry entry)
+    {
+        return shortcuts.Any(shortcut => shortcut.Operation switch
+        {
+            ShortcutOperation.Creating or ShortcutOperation.Restoring =>
+                shortcut.RootKind == entry.RootKind
+                    && PathsEqual(shortcut.RootPath, entry.RootPath)
+                    && PathsEqual(shortcut.OriginalPath, entry.Path),
+            ShortcutOperation.Renaming when shortcut.Status != ShortcutStatus.Parked =>
+                shortcut.RootKind == entry.RootKind
+                    && PathsEqual(shortcut.RootPath, entry.RootPath)
+                    && PathsEqual(Path.Combine(shortcut.RootPath, shortcut.TargetName!), entry.Path),
+            ShortcutOperation.Moving =>
+                shortcut.TargetRootKind == entry.RootKind
+                    && PathsEqual(shortcut.TargetRootPath!, entry.RootPath)
+                    && PathsEqual(Path.Combine(shortcut.TargetRootPath!, shortcut.Name), entry.Path),
+            _ => false,
+        });
     }
 
     private static bool IsValidEntry(DesktopRootSnapshot rootSnapshot, DesktopInventoryEntry entry)

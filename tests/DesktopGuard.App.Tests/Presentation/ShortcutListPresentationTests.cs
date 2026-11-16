@@ -1,5 +1,5 @@
-using DesktopGuard.App;
 using DesktopGuard.App.Application;
+using DesktopGuard.App.Presentation;
 using DesktopGuard.Core.DesktopScanning;
 using DesktopGuard.Core.Shortcuts;
 

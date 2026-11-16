@@ -29,6 +29,15 @@ public sealed class ShortcutMoveExecutorTests
     }
 
     [TestMethod]
+    public void RecycleBinFileOperation_MapsShellAccessDeniedSourceToWin32AccessDenied()
+    {
+        IOException exception = RecycleBinFileOperation.CreateFailure(0x78);
+
+        Assert.AreEqual(5, exception.HResult & 0xFFFF);
+        Assert.IsTrue(ShortcutFileTransfer.IsAccessDenied(exception));
+    }
+
+    [TestMethod]
     public async Task Move_FileLockDoesNotInvokeElevationBroker()
     {
         RecordingElevationBroker broker = new();
@@ -159,6 +168,28 @@ public sealed class ShortcutMoveExecutorTests
     }
 
     [TestMethod]
+    public void Move_PosixDeleteRemovesSourceNameWhileExistingSharedHandleRemainsOpen()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "Desktop", "source.lnk");
+        File.WriteAllText(sourcePath, "shortcut bytes");
+        using FileStream existingReader = new(
+            sourcePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+
+        ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid());
+
+        Assert.IsFalse(File.Exists(sourcePath));
+        ShortcutFileTransfer.ValidateCompletedMove(sourcePath, destinationPath);
+        existingReader.Position = 0;
+        using StreamReader reader = new(existingReader, leaveOpen: true);
+        Assert.AreEqual("shortcut bytes", reader.ReadToEnd());
+    }
+
+    [TestMethod]
     public void ParkTransfer_PreservesHiddenAttributeInRecovery()
     {
         using TemporaryDirectory temporaryDirectory = new();
@@ -170,6 +201,21 @@ public sealed class ShortcutMoveExecutorTests
         ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid(), preserveHidden: true);
 
         Assert.AreNotEqual((FileAttributes)0, File.GetAttributes(destinationPath) & FileAttributes.Hidden);
+    }
+
+    [TestMethod]
+    public void Move_ReadOnlySourceIsRemovedAfterDestinationIsPublished()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "Desktop", "source.lnk");
+        File.WriteAllText(sourcePath, "read-only shortcut bytes");
+        File.SetAttributes(sourcePath, File.GetAttributes(sourcePath) | FileAttributes.ReadOnly);
+
+        ShortcutFileTransfer.Move(sourcePath, destinationPath, Guid.NewGuid());
+
+        Assert.IsFalse(File.Exists(sourcePath));
+        Assert.AreEqual("read-only shortcut bytes", File.ReadAllText(destinationPath));
     }
 
     [TestMethod]

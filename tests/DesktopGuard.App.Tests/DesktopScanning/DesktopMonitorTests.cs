@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using DesktopGuard.App.DesktopScanning;
 using DesktopGuard.Core.DesktopScanning;
 
@@ -89,6 +90,52 @@ public sealed class DesktopMonitorTests
         await thirdScanCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    [TestMethod]
+    [DataRow(false, 2)]
+    [DataRow(true, 2)]
+    [DataRow(true, 1)]
+    public async Task RootProviderFailure_DoesNotStopTheMonitorWorker(bool unexpectedFailure, int failureCall)
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string userDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        TaskCompletionSource<bool> thirdRootRefreshCompleted = NewSignal();
+        SequenceDesktopRootProvider rootProvider = new(
+        [
+            new DesktopRoot(DesktopRootKind.User, userDesktop),
+            new DesktopRoot(DesktopRootKind.Public, publicDesktop),
+        ],
+        thirdRootRefreshCompleted,
+        unexpectedFailure,
+        failureCall);
+        TaskCompletionSource<bool> firstScanCompleted = NewSignal();
+        TaskCompletionSource<bool> secondScanCompleted = NewSignal();
+        TaskCompletionSource<bool> watchFailureReported = NewSignal();
+        int scanCount = 0;
+        using DesktopMonitor monitor = new(rootProvider, _ =>
+        {
+            if (Interlocked.Increment(ref scanCount) == 1)
+            {
+                firstScanCompleted.TrySetResult(true);
+            }
+            else
+            {
+                secondScanCompleted.TrySetResult(true);
+            }
+
+            return Task.CompletedTask;
+        });
+        monitor.WatchFailed += _ => watchFailureReported.TrySetResult(true);
+        monitor.ScanFailed += _ => watchFailureReported.TrySetResult(true);
+
+        monitor.Start();
+        await firstScanCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await watchFailureReported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        monitor.RequestScan();
+        await secondScanCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await thirdRootRefreshCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
     private static CountingDesktopRootProvider CreateRootProvider(string temporaryPath)
     {
         string userDesktop = Directory.CreateDirectory(Path.Combine(temporaryPath, "UserDesktop")).FullName;
@@ -114,6 +161,38 @@ public sealed class DesktopMonitorTests
         public IReadOnlyList<DesktopRoot> GetRoots()
         {
             Interlocked.Increment(ref _getRootsCount);
+            return roots;
+        }
+    }
+
+    private sealed class SequenceDesktopRootProvider(
+        IReadOnlyList<DesktopRoot> roots,
+        TaskCompletionSource<bool> thirdRefreshCompleted,
+        bool unexpectedFailure,
+        int failureCall) : IDesktopRootProvider
+    {
+        private int _getRootsCount;
+
+        public int GetRootsCount => Volatile.Read(ref _getRootsCount);
+
+        public IReadOnlyList<DesktopRoot> GetRoots()
+        {
+            int count = Interlocked.Increment(ref _getRootsCount);
+            if (count == failureCall)
+            {
+                if (unexpectedFailure)
+                {
+                    throw new InvalidOperationException("Unexpected root-provider failure.");
+                }
+
+                throw new COMException("Temporary known-folder failure.", unchecked((int)0x80004005));
+            }
+
+            if (count == 3)
+            {
+                thirdRefreshCompleted.TrySetResult(true);
+            }
+
             return roots;
         }
     }

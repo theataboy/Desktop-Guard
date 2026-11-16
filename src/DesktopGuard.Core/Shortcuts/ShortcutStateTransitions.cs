@@ -302,7 +302,13 @@ public static class ShortcutStateTransitions
             throw new InvalidOperationException("No parking operation is in progress for this shortcut.");
         }
 
-        return Replace(state, shortcut with
+        List<DesktopRootCheckpoint> roots = UpdateKnownPath(
+            state.Roots,
+            shortcut.RootKind,
+            shortcut.RootPath,
+            shortcut.OriginalPath,
+            isKnown: false);
+        return Replace(state with { Roots = roots }, shortcut with
         {
             Status = ShortcutStatus.Parked,
             StatusBeforeParking = shortcut.Status,
@@ -364,11 +370,23 @@ public static class ShortcutStateTransitions
             throw new InvalidOperationException("This shortcut cannot be moved in its current state.");
         }
 
+        string canonicalTargetRoot = Path.GetFullPath(targetRootPath);
+        string targetPath = Path.GetFullPath(Path.Combine(canonicalTargetRoot, shortcut.Name));
+        DesktopRootCheckpoint? targetRoot = state.Roots.FirstOrDefault(root =>
+            root.RootKind == targetRootKind && PathsEqual(root.RootPath, canonicalTargetRoot));
+        if (targetRoot is not { IsBaselined: true }
+            || !DesktopCandidatePolicy.IsDirectChildOf(canonicalTargetRoot, targetPath)
+            || targetRoot.KnownPaths.Any(path => PathsEqual(path, targetPath))
+            || IsShortcutPathClaimed(state, shortcutId, targetRootKind, canonicalTargetRoot, targetPath))
+        {
+            throw new InvalidOperationException("The destination path is already in use.");
+        }
+
         return Replace(state, shortcut with
         {
             Operation = ShortcutOperation.Moving,
             TargetRootKind = targetRootKind,
-            TargetRootPath = Path.GetFullPath(targetRootPath),
+            TargetRootPath = canonicalTargetRoot,
             OperationId = Guid.NewGuid(),
         });
     }
@@ -385,7 +403,14 @@ public static class ShortcutStateTransitions
         }
 
         string targetPath = Path.GetFullPath(Path.Combine(shortcut.TargetRootPath, shortcut.Name));
-        return Replace(state, shortcut with
+        List<DesktopRootCheckpoint> roots = UpdateKnownPath(
+            state.Roots,
+            shortcut.RootKind,
+            shortcut.RootPath,
+            shortcut.OriginalPath,
+            isKnown: false);
+        roots = UpdateKnownPath(roots, targetRootKind, shortcut.TargetRootPath, targetPath, isKnown: true);
+        return Replace(state with { Roots = roots }, shortcut with
         {
             RootKind = targetRootKind,
             RootPath = shortcut.TargetRootPath,
@@ -427,7 +452,13 @@ public static class ShortcutStateTransitions
             throw new InvalidOperationException("No restore operation is in progress for this shortcut.");
         }
 
-        return Replace(state, shortcut with
+        List<DesktopRootCheckpoint> roots = UpdateKnownPath(
+            state.Roots,
+            shortcut.RootKind,
+            shortcut.RootPath,
+            shortcut.OriginalPath,
+            isKnown: true);
+        return Replace(state with { Roots = roots }, shortcut with
         {
             Status = shortcut.StatusBeforeParking.Value,
             StatusBeforeParking = null,
@@ -486,6 +517,49 @@ public static class ShortcutStateTransitions
             .Select(shortcut => shortcut.Id == updatedShortcut.Id ? updatedShortcut : shortcut)
             .ToList();
         return state with { Shortcuts = shortcuts };
+    }
+
+    private static List<DesktopRootCheckpoint> UpdateKnownPath(
+        IEnumerable<DesktopRootCheckpoint> roots,
+        DesktopRootKind rootKind,
+        string rootPath,
+        string path,
+        bool isKnown)
+    {
+        return roots.Select(root => root.RootKind == rootKind && PathsEqual(root.RootPath, rootPath)
+            ? root with
+            {
+                KnownPaths = (isKnown
+                        ? root.KnownPaths.Append(path)
+                        : root.KnownPaths.Where(knownPath => !PathsEqual(knownPath, path)))
+                    .Distinct(GetPathComparer())
+                    .ToArray(),
+            }
+            : root).ToList();
+    }
+
+    private static bool IsShortcutPathClaimed(
+        DesktopGuardState state,
+        Guid exceptShortcutId,
+        DesktopRootKind rootKind,
+        string rootPath,
+        string targetPath)
+    {
+        return state.Shortcuts.Any(shortcut => shortcut.Id != exceptShortcutId
+            && (shortcut.RootKind == rootKind
+                    && PathsEqual(shortcut.RootPath, rootPath)
+                    && ((shortcut.Status != ShortcutStatus.Parked
+                            || shortcut.Operation == ShortcutOperation.Restoring)
+                        && PathsEqual(shortcut.OriginalPath, targetPath)
+                        || shortcut.Operation == ShortcutOperation.Renaming
+                            && shortcut.Status != ShortcutStatus.Parked
+                            && PathsEqual(
+                                Path.Combine(shortcut.RootPath, shortcut.TargetName!),
+                                targetPath))
+                || shortcut.Operation == ShortcutOperation.Moving
+                    && shortcut.TargetRootKind == rootKind
+                    && PathsEqual(shortcut.TargetRootPath!, rootPath)
+                    && PathsEqual(Path.Combine(shortcut.TargetRootPath!, shortcut.Name), targetPath)));
     }
 
     private static bool PathsEqual(string left, string right)

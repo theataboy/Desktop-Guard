@@ -6,6 +6,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <Version>1.0.1</Version>
     <ApplicationIcon>Resources\DesktopGuard.ico</ApplicationIcon>
     <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
     <NeutralLanguage>en</NeutralLanguage>
@@ -17,11 +18,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Resources\ApplicationMetadata.dat" LogicalName="DesktopGuard.App.Data.ApplicationMetadata" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" PrivateAssets="all" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Include="Resources\8d2f.dat" LogicalName="DesktopGuard.App.Data.8d2f" />
   </ItemGroup>
 
   <!-- The Windows App SDK marks the notification projections as non-publishable, though the app loads them at runtime. -->

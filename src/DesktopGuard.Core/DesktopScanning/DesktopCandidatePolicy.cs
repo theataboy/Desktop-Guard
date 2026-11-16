@@ -77,7 +77,7 @@ public static class DesktopCandidatePolicy
             "CONOUT$",
         };
 
-        for (int number = 1; number <= 9; number++)
+        for (int number = 0; number <= 9; number++)
         {
             names.Add($"COM{number}");
             names.Add($"LPT{number}");

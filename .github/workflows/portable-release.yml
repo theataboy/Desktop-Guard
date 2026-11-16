@@ -21,7 +21,58 @@ jobs:
       - name: Set up .NET 10
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
+
+      - name: Require release tag to match application version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [xml]$project = Get-Content -LiteralPath 'src/DesktopGuard.App/DesktopGuard.App.csproj' -Raw
+          $version = [string]$project.Project.PropertyGroup.Version
+          if (-not $version -or $env:RELEASE_TAG -ne "v$version") {
+            throw "Release tag '$env:RELEASE_TAG' must match the application version 'v$version'."
+          }
+
+      - name: Restore locked dependencies and require a complete clean vulnerability audit
+        shell: pwsh
+        run: dotnet restore DesktopGuard.sln --locked-mode -warnaserror:NU1900,NU1901,NU1902,NU1903,NU1904,NU1905
+
+      - name: Run solution tests
+        shell: pwsh
+        run: dotnet test DesktopGuard.sln --no-restore
+
+      - name: Verify formatting
+        shell: pwsh
+        run: dotnet format DesktopGuard.sln --verify-no-changes --no-restore
+
+      - name: Report vulnerable direct and transitive packages
+        shell: pwsh
+        run: dotnet package list --project DesktopGuard.sln --vulnerable --include-transitive
+
+      - name: Require the file symlink security regression to run
+        shell: pwsh
+        run: |
+          $resultsDirectory = Join-Path $env:RUNNER_TEMP 'desktop-guard-symlink-test'
+          dotnet test tests/DesktopGuard.App.Tests/DesktopGuard.App.Tests.csproj `
+            --no-restore `
+            --filter 'FullyQualifiedName~RetryMove_ReparseDestinationNeverRemovesTheSource' `
+            --logger 'trx;LogFileName=symlink-regression.trx' `
+            --results-directory $resultsDirectory
+          if ($LASTEXITCODE -ne 0) {
+            throw "The file symlink regression failed with exit code $LASTEXITCODE."
+          }
+
+          $resultPath = Join-Path $resultsDirectory 'symlink-regression.trx'
+          if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+            throw 'The file symlink regression did not produce a test result.'
+          }
+
+          [xml]$testRun = Get-Content -LiteralPath $resultPath -Raw
+          $testResults = @($testRun.TestRun.Results.UnitTestResult)
+          if ($testResults.Count -ne 1 -or $testResults[0].outcome -ne 'Passed') {
+            throw 'The file symlink security regression must pass; skipped or inconclusive execution blocks release.'
+          }
 
       - name: Build portable package
         shell: pwsh

@@ -18,21 +18,23 @@ internal static class Program
         {
             return args.Length == 2
                 ? ElevatedShortcutOperationRunner.Run(args[1])
-                : 10;
+                : ElevatedShortcutOperationRunner.InvalidRequestExitCode;
         }
 
         if (args.Any(argument => string.Equals(argument, "--elevated-file-operation", StringComparison.Ordinal)))
         {
-            return 10;
+            return ElevatedShortcutOperationRunner.InvalidRequestExitCode;
         }
 
         ApplicationConfiguration.Initialize();
 
         string userId = WindowsIdentity.GetCurrent().User?.Value
             ?? throw new InvalidOperationException("The signed-in Windows user could not be identified.");
+        using EventWaitHandle activationSignal = SingleInstanceActivationSignal.Create(userId);
         using Mutex instanceMutex = new(initiallyOwned: true, $"Local\\DesktopGuard-{userId}", out bool isFirstInstance);
         if (!isFirstInstance)
         {
+            activationSignal.Set();
             return 0;
         }
 
@@ -53,8 +55,17 @@ internal static class Program
             controller,
             rootProvider,
             notifications,
-            args.Any(argument => string.Equals(argument, "--background", StringComparison.Ordinal)));
-        System.Windows.Forms.Application.Run(context);
+            args.Any(argument => string.Equals(argument, "--background", StringComparison.Ordinal)),
+            enableShellIntegration: true,
+            activationSignal: activationSignal);
+        try
+        {
+            System.Windows.Forms.Application.Run(context);
+        }
+        finally
+        {
+            instanceMutex.ReleaseMutex();
+        }
         return 0;
     }
 }

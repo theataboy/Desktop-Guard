@@ -68,6 +68,21 @@ internal sealed class ShortcutFileManager
         _desktopShortcutCreator.EnsureDestinationAvailable(userRootPath);
     }
 
+    public void EnsureMoveDestinationAvailable(
+        TrackedShortcut shortcut,
+        DesktopRootKind targetRootKind,
+        string targetRootPath)
+    {
+        ArgumentNullException.ThrowIfNull(shortcut);
+        if (!Enum.IsDefined(targetRootKind) || targetRootKind == shortcut.RootKind)
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
+        }
+
+        string root = GetCurrentDesktopRoot(targetRootKind, targetRootPath);
+        EnsureNoDestinationEntry(BuildDesktopPath(root, shortcut.Name));
+    }
+
     public void CreateDesktopShortcut(
         TrackedShortcut shortcut,
         string targetPath,
@@ -626,6 +641,12 @@ internal sealed class ShortcutFileManager
             {
                 throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AmbiguousRecovery);
             }
+        }
+        catch (ShortcutFileOperationException exception)
+            when (exception.Failure == ShortcutFileOperationFailure.DestinationConflict && !allowExistingDestination)
+        {
+            ShortcutFileTransfer.CleanOperationTemporaryFiles(destinationPath, operationId);
+            throw;
         }
         catch (ShortcutFileOperationException)
         {

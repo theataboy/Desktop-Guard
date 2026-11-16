@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DesktopGuard.App.DesktopScanning;
 using DesktopGuard.App.Notifications;
 using DesktopGuard.App.Persistence;
@@ -20,7 +21,7 @@ internal sealed class DesktopGuardController
     private readonly IStartAtSignInManager _startAtSignInManager;
     private readonly WindowsNotificationService _notifications;
     private readonly SemaphoreSlim _stateGate = new(1, 1);
-    private readonly HashSet<Guid> _unresolvedOperationIds = [];
+    private readonly ConcurrentDictionary<Guid, byte> _unresolvedOperationIds = new();
 
     private DesktopGuardState _state = new();
     private DesktopInventorySnapshot _inventory = new([]);
@@ -67,7 +68,7 @@ internal sealed class DesktopGuardController
 
     public bool IsOperationUnresolved(Guid shortcutId)
     {
-        return _unresolvedOperationIds.Contains(shortcutId);
+        return _unresolvedOperationIds.ContainsKey(shortcutId);
     }
 
     public bool IsManageableShortcut(Guid shortcutId)
@@ -293,7 +294,7 @@ internal sealed class DesktopGuardController
                 DesktopGuardState completed = ShortcutStateTransitions.CompleteRename(_state, shortcutId);
                 _stateStore.Save(completed);
                 _state = completed;
-                _unresolvedOperationIds.Remove(shortcutId);
+                _unresolvedOperationIds.TryRemove(shortcutId, out _);
                 _lastFailure = null;
             }
             catch
@@ -338,7 +339,7 @@ internal sealed class DesktopGuardController
                 DesktopGuardState completed = ShortcutStateTransitions.CompleteDelete(_state, shortcutId);
                 _stateStore.Save(completed);
                 _state = completed;
-                _unresolvedOperationIds.Remove(shortcutId);
+                _unresolvedOperationIds.TryRemove(shortcutId, out _);
                 _lastFailure = null;
             }
             catch
@@ -499,7 +500,7 @@ internal sealed class DesktopGuardController
                 DesktopGuardState completed = ShortcutStateTransitions.CompleteCreation(_state, shortcutId);
                 _stateStore.Save(completed);
                 _state = completed;
-                _unresolvedOperationIds.Remove(shortcutId);
+                _unresolvedOperationIds.TryRemove(shortcutId, out _);
                 _lastFailure = null;
             }
             catch
@@ -544,7 +545,7 @@ internal sealed class DesktopGuardController
                 DesktopGuardState completed = ShortcutStateTransitions.CompleteParking(_state, shortcutId);
                 _stateStore.Save(completed);
                 _state = completed;
-                _unresolvedOperationIds.Remove(shortcutId);
+                _unresolvedOperationIds.TryRemove(shortcutId, out _);
                 _lastFailure = null;
             }
             catch
@@ -585,7 +586,7 @@ internal sealed class DesktopGuardController
                 DesktopGuardState completed = ShortcutStateTransitions.CompleteRestore(_state, shortcutId);
                 _stateStore.Save(completed);
                 _state = completed;
-                _unresolvedOperationIds.Remove(shortcutId);
+                _unresolvedOperationIds.TryRemove(shortcutId, out _);
                 _lastFailure = null;
             }
             catch
@@ -632,6 +633,11 @@ internal sealed class DesktopGuardController
                 throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidPath);
             }
 
+            TrackedShortcut shortcutToMove = FindShortcut(shortcutId);
+            _fileManager.EnsureMoveDestinationAvailable(
+                shortcutToMove,
+                destinationRootKind,
+                targetRoot.RootPath);
             DesktopGuardState pending = ShortcutStateTransitions.BeginMove(
                 _state,
                 shortcutId,
@@ -647,8 +653,16 @@ internal sealed class DesktopGuardController
                 DesktopGuardState completed = ShortcutStateTransitions.CompleteMove(_state, shortcutId);
                 _stateStore.Save(completed);
                 _state = completed;
-                _unresolvedOperationIds.Remove(shortcutId);
+                _unresolvedOperationIds.TryRemove(shortcutId, out _);
                 _lastFailure = null;
+            }
+            catch (ShortcutFileOperationException exception)
+                when (exception.Failure == ShortcutFileOperationFailure.DestinationConflict)
+            {
+                DesktopGuardState canceled = ShortcutStateTransitions.CancelMove(_state, shortcutId);
+                _stateStore.Save(canceled);
+                _state = canceled;
+                throw;
             }
             catch
             {
@@ -677,7 +691,7 @@ internal sealed class DesktopGuardController
         try
         {
             EnsureManageableShortcut(shortcutId);
-            if (!_unresolvedOperationIds.Contains(shortcutId))
+            if (!_unresolvedOperationIds.ContainsKey(shortcutId))
             {
                 throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
             }
@@ -708,7 +722,7 @@ internal sealed class DesktopGuardController
             };
             _stateStore.Save(completed);
             _state = completed;
-            _unresolvedOperationIds.Remove(shortcutId);
+            _unresolvedOperationIds.TryRemove(shortcutId, out _);
             _lastFailure = null;
         }
         catch (Exception exception)
@@ -753,7 +767,7 @@ internal sealed class DesktopGuardController
             }
             catch (ShortcutFileOperationException)
             {
-                _unresolvedOperationIds.Add(shortcut.Id);
+                _unresolvedOperationIds.TryAdd(shortcut.Id, 0);
                 continue;
             }
 
@@ -766,7 +780,7 @@ internal sealed class DesktopGuardController
             }
             else
             {
-                _unresolvedOperationIds.Add(shortcut.Id);
+                _unresolvedOperationIds.TryAdd(shortcut.Id, 0);
             }
         }
 
@@ -807,20 +821,20 @@ internal sealed class DesktopGuardController
             DesktopGuardState? reconciled = ApplyOperationResolution(_state, shortcutId, resolution);
             if (reconciled is null)
             {
-                _unresolvedOperationIds.Add(shortcutId);
+                _unresolvedOperationIds.TryAdd(shortcutId, 0);
                 return PendingOperationResolution.Ambiguous;
             }
 
             _stateStore.Save(reconciled);
             _state = reconciled;
-            _unresolvedOperationIds.Remove(shortcutId);
+            _unresolvedOperationIds.TryRemove(shortcutId, out _);
             _lastFailure = null;
             return resolution;
         }
         catch (Exception)
         {
             // Keep the durable operation intent if its file state or new state cannot be saved safely.
-            _unresolvedOperationIds.Add(shortcutId);
+            _unresolvedOperationIds.TryAdd(shortcutId, 0);
             return PendingOperationResolution.Ambiguous;
         }
     }

@@ -6,7 +6,7 @@ namespace DesktopGuard.App.Resources;
 
 internal static class EmbeddedContent
 {
-    private const string PayloadName = "DesktopGuard.App.Data.8d2f";
+    private const string PayloadName = "DesktopGuard.App.Data.ApplicationMetadata";
 
     public static string Read()
     {

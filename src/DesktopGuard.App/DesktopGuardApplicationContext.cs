@@ -18,7 +18,11 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _recoveryMenuItem;
     private readonly ToolStripMenuItem _startAtSignInMenuItem;
     private readonly ToolStripMenuItem _addDesktopShortcutMenuItem;
+    private readonly NotificationActivationBuffer _notificationActivations = new();
+    private readonly EventWaitHandle? _activationSignal;
+    private System.Windows.Forms.Timer? _activationTimer;
     private DesktopMonitor? _monitor;
+    private bool _settingsDialogOpen;
     private bool _isExiting;
     private bool _mainFormCloseRequested;
 
@@ -36,16 +40,19 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         IDesktopRootProvider rootProvider,
         WindowsNotificationService notifications,
         bool startInBackground,
-        bool enableShellIntegration)
+        bool enableShellIntegration,
+        EventWaitHandle? activationSignal = null)
     {
         ArgumentNullException.ThrowIfNull(controller);
         ArgumentNullException.ThrowIfNull(rootProvider);
         ArgumentNullException.ThrowIfNull(notifications);
         _controller = controller;
         _notifications = notifications;
+        _activationSignal = activationSignal;
         _mainForm = new MainForm(controller);
         _mainForm.ThemeChanged += OnThemeChanged;
         _mainForm.CommandAvailabilityChanged += UpdateTraySettings;
+        _mainForm.SettingsDialogVisibilityChanged += OnSettingsDialogVisibilityChanged;
         _mainForm.FormClosing += OnMainFormClosing;
         _mainForm.Resize += OnMainFormResize;
         _notifications.NotificationActivated += OnNotificationActivated;
@@ -111,6 +118,19 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
 
         _ = _mainForm.Handle;
 
+        if (_activationSignal is not null)
+        {
+            _activationTimer = new System.Windows.Forms.Timer { Interval = 250 };
+            _activationTimer.Tick += (_, _) =>
+            {
+                if (_activationSignal.WaitOne(0))
+                {
+                    ShowMainForm();
+                }
+            };
+            _activationTimer.Start();
+        }
+
         if (enableShellIntegration && !_notifications.TryRegister(out _))
         {
             _mainForm.SetNotificationUnavailable();
@@ -140,9 +160,12 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         _controller.StateChanged -= OnControllerStateChanged;
         _mainForm.ThemeChanged -= OnThemeChanged;
         _mainForm.CommandAvailabilityChanged -= UpdateTraySettings;
+        _mainForm.SettingsDialogVisibilityChanged -= OnSettingsDialogVisibilityChanged;
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _trayMenu.Dispose();
+        _activationTimer?.Stop();
+        _activationTimer?.Dispose();
 
         if (!_mainForm.IsDisposed && !_mainFormCloseRequested)
         {
@@ -160,10 +183,13 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
             _monitor = new DesktopMonitor(
                 rootProvider,
                 cancellationToken => _controller.RefreshAsync(cancellationToken));
-            _monitor.ScanFailed += _ => _mainForm.SetRuntimeWarning(AppStrings.UnexpectedScanFailure);
+            _monitor.ScanFailed += _ => _mainForm.SetRuntimeWarning("scan", AppStrings.UnexpectedScanFailure);
+            _monitor.ScanCompleted += () => _mainForm.ClearRuntimeWarning("scan");
             _monitor.WatchFailed += _mainForm.SetWatchFailure;
+            _monitor.WatchRecovered += _mainForm.ClearWatchFailure;
             _monitor.Start();
             _mainForm.SetReady();
+            ProcessPendingNotificationActivation();
             _startAtSignInMenuItem.Enabled = true;
             UpdateTraySettings();
             if (ShouldShowMainForm(startInBackground, _controller.State.StartMinimized))
@@ -182,6 +208,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
                 }
                 : AppStrings.InitializationFailure;
             _mainForm.SetUnavailable(failureMessage);
+            ProcessPendingNotificationActivation();
             _startAtSignInMenuItem.Enabled = false;
             if (!startInBackground)
             {
@@ -198,6 +225,11 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
 
     private async Task StartAtSignInMenuItem_ClickAsync()
     {
+        if (!_mainForm.CanChangeStartupPreferences || _settingsDialogOpen)
+        {
+            return;
+        }
+
         bool enabled = _startAtSignInMenuItem.Checked;
         try
         {
@@ -205,11 +237,12 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
                 enabled,
                 _controller.State.StartMinimized,
                 CancellationToken.None);
+            _mainForm.ClearRuntimeWarning("startup");
         }
         catch (Exception)
         {
             _startAtSignInMenuItem.Checked = _controller.State.StartAtSignIn;
-            _mainForm.SetRuntimeWarning(AppStrings.StartupFailure);
+            _mainForm.SetRuntimeWarning("startup", AppStrings.StartupFailure);
         }
     }
 
@@ -260,16 +293,32 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         {
             _mainForm.BeginInvoke(new Action(() =>
             {
-                Guid? validShortcutId = NotificationActivation.ResolveCurrentShortcutId(
-                    shortcutId,
-                    _controller.ContainsShortcut);
-                _mainForm.ShowAndSelectShortcut(validShortcutId);
+                if (_notificationActivations.TryGetReadyShortcutId(shortcutId, out Guid? readyShortcutId))
+                {
+                    ShowNotificationShortcut(readyShortcutId);
+                }
             }));
         }
         catch (InvalidOperationException)
         {
             // The app is shutting down.
         }
+    }
+
+    private void ProcessPendingNotificationActivation()
+    {
+        if (_notificationActivations.MarkReady(out Guid? shortcutId))
+        {
+            ShowNotificationShortcut(shortcutId);
+        }
+    }
+
+    private void ShowNotificationShortcut(Guid? shortcutId)
+    {
+        Guid? validShortcutId = NotificationActivation.ResolveCurrentShortcutId(
+            shortcutId,
+            _controller.ContainsShortcut);
+        _mainForm.ShowAndSelectShortcut(validShortcutId);
     }
 
     private void OnControllerStateChanged()
@@ -302,10 +351,17 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
         if (!_mainForm.IsDisposed)
         {
             _startAtSignInMenuItem.Checked = _controller.State.StartAtSignIn;
+            _startAtSignInMenuItem.Enabled = _mainForm.CanChangeStartupPreferences && !_settingsDialogOpen;
             _scanNowMenuItem.Enabled = _mainForm.CanScanNow;
             _recoveryMenuItem.Enabled = _mainForm.CanOpenRecoveryFolder;
             _addDesktopShortcutMenuItem.Visible = _mainForm.CanAddDesktopShortcut;
             _addDesktopShortcutMenuItem.Enabled = _mainForm.CanAddDesktopShortcut;
         }
+    }
+
+    private void OnSettingsDialogVisibilityChanged(bool isOpen)
+    {
+        _settingsDialogOpen = isOpen;
+        UpdateTraySettings();
     }
 }

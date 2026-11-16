@@ -41,6 +41,8 @@ public sealed class DesktopCandidatePolicyTests
         Assert.IsTrue(DesktopCandidatePolicy.IsValidWindowsFileName("Program.lnk"));
         Assert.IsFalse(DesktopCandidatePolicy.IsValidWindowsFileName("Program:stream.lnk"));
         Assert.IsFalse(DesktopCandidatePolicy.IsValidWindowsFileName("CON.lnk"));
+        Assert.IsFalse(DesktopCandidatePolicy.IsValidWindowsFileName("COM0.lnk"));
+        Assert.IsFalse(DesktopCandidatePolicy.IsValidWindowsFileName("LPT0.url"));
         Assert.IsFalse(DesktopCandidatePolicy.IsValidWindowsFileName("report.url."));
     }
 }

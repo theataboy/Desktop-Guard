@@ -36,7 +36,11 @@ internal sealed class DesktopMonitor : IDisposable
 
     public event Action<Exception>? ScanFailed;
 
+    public event Action? ScanCompleted;
+
     public event Action<DesktopRootKind>? WatchFailed;
+
+    public event Action<DesktopRootKind>? WatchRecovered;
 
     internal FileSystemWatcher? GetWatcher(DesktopRootKind kind)
     {
@@ -54,7 +58,7 @@ internal sealed class DesktopMonitor : IDisposable
             return;
         }
 
-        RefreshWatchers();
+        RefreshWatchersSafely();
         _periodicScanTimer = new System.Threading.Timer(
             _ => RequestScan(),
             null,
@@ -113,12 +117,13 @@ internal sealed class DesktopMonitor : IDisposable
 
                 if (Interlocked.Exchange(ref _watchersNeedRefresh, 0) != 0)
                 {
-                    RefreshWatchers();
+                    RefreshWatchersSafely();
                 }
 
                 try
                 {
                     await _scanAsync(cancellationToken).ConfigureAwait(false);
+                    ScanCompleted?.Invoke();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -131,13 +136,25 @@ internal sealed class DesktopMonitor : IDisposable
 
                 if (!cancellationToken.IsCancellationRequested)
                 {
-                    RefreshWatchers();
+                    RefreshWatchersSafely();
                 }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Normal application shutdown.
+        }
+    }
+
+    private void RefreshWatchersSafely()
+    {
+        try
+        {
+            RefreshWatchers();
+        }
+        catch (Exception exception)
+        {
+            ScanFailed?.Invoke(exception);
         }
     }
 
@@ -157,6 +174,7 @@ internal sealed class DesktopMonitor : IDisposable
             }
             catch (Exception exception) when (IsExpectedFileSystemException(exception))
             {
+                _failedWatchers.UnionWith([DesktopRootKind.User, DesktopRootKind.Public]);
                 WatchFailed?.Invoke(DesktopRootKind.User);
                 WatchFailed?.Invoke(DesktopRootKind.Public);
                 return;
@@ -195,6 +213,10 @@ internal sealed class DesktopMonitor : IDisposable
                 RemoveWatcher(root.Kind);
                 if (!Directory.Exists(canonicalPath))
                 {
+                    if (failed)
+                    {
+                        _failedWatchers.Add(root.Kind);
+                    }
                     continue;
                 }
 
@@ -216,9 +238,14 @@ internal sealed class DesktopMonitor : IDisposable
                     watcher.Error += OnWatcherError;
                     watcher.EnableRaisingEvents = true;
                     _watchers[root.Kind] = (canonicalPath, watcher);
+                    if (failed)
+                    {
+                        WatchRecovered?.Invoke(root.Kind);
+                    }
                 }
                 catch (Exception exception) when (IsExpectedFileSystemException(exception))
                 {
+                    _failedWatchers.Add(root.Kind);
                     WatchFailed?.Invoke(root.Kind);
                 }
             }
@@ -294,6 +321,7 @@ internal sealed class DesktopMonitor : IDisposable
             or UnauthorizedAccessException
             or ArgumentException
             or NotSupportedException
+            or System.Runtime.InteropServices.COMException
             or System.Security.SecurityException;
     }
 }

@@ -77,6 +77,15 @@ public static class DesktopStateValidator
             return false;
         }
 
+        if (state.Roots.Any(root => !root.IsBaselined && state.Shortcuts.Any(shortcut =>
+                shortcut.RootKind == root.RootKind && PathsEqual(shortcut.RootPath, root.RootPath)
+                || shortcut.Operation == ShortcutOperation.Moving
+                    && shortcut.TargetRootKind == root.RootKind
+                    && PathsEqual(shortcut.TargetRootPath!, root.RootPath))))
+        {
+            return false;
+        }
+
         if (state.Shortcuts.Any(shortcut => !state.Roots.Any(root =>
                     root.RootKind == shortcut.RootKind && PathsEqual(root.RootPath, shortcut.RootPath))
                 || shortcut.Operation == ShortcutOperation.Moving
@@ -101,6 +110,8 @@ public static class DesktopStateValidator
                 .Select(shortcut => Path.Combine(shortcut.TargetRootPath!, shortcut.Name))
                 .Distinct(GetPathComparer())
                 .Count() != state.Shortcuts.Count(shortcut => shortcut.Operation == ShortcutOperation.Moving)
+            || state.Shortcuts.Any(shortcut => shortcut.Operation == ShortcutOperation.Moving
+                && HasMoveTargetCollision(state, shortcut))
             || allowExtendedOperations && state.Shortcuts
                 .Where(shortcut => shortcut.Operation == ShortcutOperation.Renaming
                     && shortcut.Status != ShortcutStatus.Parked)
@@ -136,6 +147,7 @@ public static class DesktopStateValidator
             && IsBoundedAbsolutePath(root.RootPath)
             && root.KnownPaths is not null
             && root.KnownPaths.Count <= 8192
+            && (root.IsBaselined || root.KnownPaths.Count == 0)
             && root.KnownPaths.All(path =>
                 IsBoundedAbsolutePath(path)
                     && DesktopCandidatePolicy.IsValidWindowsFileName(Path.GetFileName(path))
@@ -293,6 +305,31 @@ public static class DesktopStateValidator
     {
         return DesktopCandidatePolicy.IsValidWindowsFileName(name)
             && string.Equals(Path.GetFileName(name), name, StringComparison.Ordinal);
+    }
+
+    private static bool HasMoveTargetCollision(DesktopGuardState state, TrackedShortcut movingShortcut)
+    {
+        string targetPath = Path.Combine(movingShortcut.TargetRootPath!, movingShortcut.Name);
+        DesktopRootCheckpoint? targetRoot = state.Roots.FirstOrDefault(root =>
+            root.RootKind == movingShortcut.TargetRootKind
+                && PathsEqual(root.RootPath, movingShortcut.TargetRootPath!));
+        return targetRoot is not null
+                && targetRoot.KnownPaths.Any(path => PathsEqual(path, targetPath))
+            || state.Shortcuts.Any(other => other.Id != movingShortcut.Id
+                && (other.RootKind == movingShortcut.TargetRootKind
+                        && PathsEqual(other.RootPath, movingShortcut.TargetRootPath!)
+                        && ((other.Status != ShortcutStatus.Parked
+                                || other.Operation == ShortcutOperation.Restoring)
+                            && PathsEqual(other.OriginalPath, targetPath)
+                            || other.Operation == ShortcutOperation.Renaming
+                                && other.Status != ShortcutStatus.Parked
+                                && PathsEqual(
+                                    Path.Combine(other.RootPath, other.TargetName!),
+                                    targetPath))
+                    || other.Operation == ShortcutOperation.Moving
+                        && other.TargetRootKind == movingShortcut.TargetRootKind
+                        && PathsEqual(other.TargetRootPath!, movingShortcut.TargetRootPath!)
+                        && PathsEqual(Path.Combine(other.TargetRootPath!, other.Name), targetPath)));
     }
 
     private static bool IsBoundedAbsolutePath(string? path)

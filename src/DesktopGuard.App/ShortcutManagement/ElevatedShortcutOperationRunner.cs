@@ -7,7 +7,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DesktopGuard.App.DesktopScanning;
 using DesktopGuard.Core.DesktopScanning;
-using Microsoft.VisualBasic.FileIO;
 using Microsoft.Win32.SafeHandles;
 
 namespace DesktopGuard.App.ShortcutManagement;
@@ -15,7 +14,7 @@ namespace DesktopGuard.App.ShortcutManagement;
 internal static class ElevatedShortcutOperationRunner
 {
     public const int SuccessExitCode = 0;
-    private const int InvalidRequestExitCode = 10;
+    public const int InvalidRequestExitCode = 10;
     private const int AccessDeniedExitCode = 20;
     private const int FileLockedExitCode = 21;
     private const int DestinationConflictExitCode = 22;
@@ -269,11 +268,7 @@ internal static class ElevatedShortcutOperationRunner
                     throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AccessDenied);
                 }
 
-                FileSystem.DeleteFile(
-                    sourcePath,
-                    UIOption.OnlyErrorDialogs,
-                    RecycleOption.SendToRecycleBin,
-                    UICancelOption.ThrowException);
+                RecycleBinFileOperation.Delete(sourcePath);
                 EnsureFileWasRemoved(sourcePath);
                 return;
             case ElevatedShortcutOperationKind.DeletePermanently:

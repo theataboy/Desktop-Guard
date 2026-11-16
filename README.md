@@ -48,7 +48,7 @@ The script restores in locked mode, publishes the self-contained compressed exec
 
 ### Prepare a GitHub release
 
-After the workflow is on GitHub, push a version tag such as `v1.0.0`. GitHub Actions builds the portable ZIP on Windows and attaches it to a draft release. Complete the release checks in [SECURITY.md](SECURITY.md), review the draft, then publish it from GitHub. Each version tag must be new; the workflow fails if a release already exists for that tag and never replaces its assets. The temporary Actions artifact expires after one day. For private repositories, the workflow uses the repository's included Actions compute and storage quota; extra usage may be billed.
+After the workflow is on GitHub, push a version tag such as `v1.0.1`. GitHub Actions builds the portable ZIP on Windows and attaches it to a draft release. Complete the release checks in [SECURITY.md](SECURITY.md), review the draft, then publish it from GitHub. Each version tag must be new; the workflow fails if a release already exists for that tag and never replaces its assets. The temporary Actions artifact expires after one day. For private repositories, the workflow uses the repository's included Actions compute and storage quota; extra usage may be billed.
 
 ## Security
 

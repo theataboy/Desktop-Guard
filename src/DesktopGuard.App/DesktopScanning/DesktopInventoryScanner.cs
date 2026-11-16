@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security;
 using DesktopGuard.Core.DesktopScanning;
 
@@ -39,7 +40,7 @@ internal sealed class DesktopInventoryScanner
             DesktopRootSnapshot common = new(DesktopRootKind.Public, string.Empty, false, []);
             issues.Add(new DesktopScanIssue(DesktopRootKind.User, DesktopScanIssueKind.RootUnavailable));
             issues.Add(new DesktopScanIssue(DesktopRootKind.Public, DesktopScanIssueKind.RootUnavailable));
-            return new DesktopScanResult(new DesktopInventorySnapshot([user, common]), issues);
+            return new DesktopScanResult(new DesktopInventorySnapshot(new[] { user, common }), issues);
         }
 
         List<DesktopRootSnapshot> rootSnapshots = [];
@@ -127,15 +128,15 @@ internal sealed class DesktopInventoryScanner
             return false;
         }
 
+        if ((attributes & FileAttributes.Directory) != 0)
+        {
+            return true;
+        }
+
         if ((attributes & FileAttributes.ReparsePoint) != 0)
         {
             issues.Add(new DesktopScanIssue(rootKind, DesktopScanIssueKind.ReparsePointSkipped));
             return false;
-        }
-
-        if ((attributes & FileAttributes.Directory) != 0)
-        {
-            return true;
         }
 
         string name = Path.GetFileName(candidatePath);
@@ -161,6 +162,7 @@ internal sealed class DesktopInventoryScanner
             or UnauthorizedAccessException
             or ArgumentException
             or NotSupportedException
+            or COMException
             or SecurityException;
     }
 }

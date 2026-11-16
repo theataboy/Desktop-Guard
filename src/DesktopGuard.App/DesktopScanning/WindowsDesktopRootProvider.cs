@@ -9,10 +9,10 @@ internal sealed class WindowsDesktopRootProvider : IDesktopRootProvider
 
     public IReadOnlyList<DesktopRoot> GetRoots()
     {
-        return
-        [
+        return new DesktopRoot[]
+        {
             new DesktopRoot(DesktopRootKind.User, WindowsKnownFolderPath.Get(DesktopFolderId)),
             new DesktopRoot(DesktopRootKind.Public, WindowsKnownFolderPath.Get(PublicDesktopFolderId)),
-        ];
+        };
     }
 }

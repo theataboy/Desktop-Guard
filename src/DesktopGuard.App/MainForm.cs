@@ -2,6 +2,7 @@ using System.Diagnostics;
 using DesktopGuard.App.Application;
 using DesktopGuard.App.DesktopScanning;
 using DesktopGuard.App.Persistence;
+using DesktopGuard.App.Presentation;
 using DesktopGuard.App.Resources;
 using DesktopGuard.App.ShortcutManagement;
 using DesktopGuard.Core.DesktopScanning;
@@ -16,7 +17,7 @@ internal partial class MainForm : Form
 
     private readonly DesktopGuardController _controller;
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly List<string> _runtimeWarnings = [];
+    private readonly RuntimeWarningSet _runtimeWarnings = new();
     private readonly ShortcutListPresentation _presentation = new();
     private Button _shortcutActionsButton = null!;
     private ContextMenuStrip _shortcutActionsMenu = null!;
@@ -33,6 +34,8 @@ internal partial class MainForm : Form
     public event Action? ThemeChanged;
 
     public event Action? CommandAvailabilityChanged;
+
+    public event Action<bool>? SettingsDialogVisibilityChanged;
 
     public MainForm(DesktopGuardController controller)
     {
@@ -217,6 +220,8 @@ internal partial class MainForm : Form
 
     public bool CanOpenRecoveryFolder => _canManage;
 
+    public bool CanChangeStartupPreferences => _canManage && !_isBusy;
+
     public bool CanAddDesktopShortcut => _canManage && !_isBusy && _controller.CanAddDesktopShortcut;
 
     public Task ScanNowAsync()
@@ -243,6 +248,7 @@ internal partial class MainForm : Form
             {
                 UseShellExecute = true,
             });
+            ClearRuntimeWarning("recovery");
         }
         catch (Exception)
         {
@@ -257,25 +263,35 @@ internal partial class MainForm : Form
             }
             else
             {
-                AddRuntimeWarning(AppStrings.RecoveryFolderUnavailable);
+                SetRuntimeWarning("recovery", AppStrings.RecoveryFolderUnavailable);
             }
         }
     }
 
     public void SetNotificationUnavailable()
     {
-        AddRuntimeWarning(AppStrings.NotificationUnavailable);
+        SetRuntimeWarning("notifications", AppStrings.NotificationUnavailable);
     }
 
     public void SetRuntimeWarning(string warning)
     {
-        AddRuntimeWarning(warning);
+        SetRuntimeWarning(warning, warning);
+    }
+
+    public void SetRuntimeWarning(string source, string warning)
+    {
+        UpdateRuntimeWarning(source, warning);
+    }
+
+    public void ClearRuntimeWarning(string source)
+    {
+        UpdateRuntimeWarning(source, null);
     }
 
     public void SetUnavailable(string message)
     {
         _canManage = false;
-        AddRuntimeWarning(message);
+        SetRuntimeWarning("initialization", message);
         UpdateCommandAvailability();
     }
 
@@ -288,7 +304,12 @@ internal partial class MainForm : Form
     public void SetWatchFailure(DesktopRootKind rootKind)
     {
         string rootName = GetRootName(rootKind);
-        AddRuntimeWarning(string.Format(AppStrings.RootWatchFailedFormat, rootName));
+        SetRuntimeWarning($"watch:{rootKind}", string.Format(AppStrings.RootWatchFailedFormat, rootName));
+    }
+
+    public void ClearWatchFailure(DesktopRootKind rootKind)
+    {
+        ClearRuntimeWarning($"watch:{rootKind}");
     }
 
     public void ShowAndSelectShortcut(Guid? shortcutId)
@@ -464,23 +485,35 @@ internal partial class MainForm : Form
             return;
         }
 
-        using SettingsForm settings = new(
-            _controller.State.StartAtSignIn,
-            _controller.State.StartMinimized);
-        if (settings.ShowDialog(this) != DialogResult.OK
-            || settings.StartAtSignIn == _controller.State.StartAtSignIn
-                && settings.StartMinimized == _controller.State.StartMinimized)
+        SettingsDialogVisibilityChanged?.Invoke(true);
+        try
         {
-            return;
-        }
+            using SettingsForm settings = new(
+                _controller.State.StartAtSignIn,
+                _controller.State.StartMinimized);
+            if (settings.ShowDialog(this) != DialogResult.OK
+                || settings.StartAtSignIn == _controller.State.StartAtSignIn
+                    && settings.StartMinimized == _controller.State.StartMinimized)
+            {
+                return;
+            }
 
-        await RunCommandAsync(
-            () => _controller.SetStartupPreferencesAsync(
-                settings.StartAtSignIn,
-                settings.StartMinimized,
-                _shutdown.Token),
-            string.Empty,
-            showFailureDialog: true);
+            await RunCommandAsync(
+                async () =>
+                {
+                    await _controller.SetStartupPreferencesAsync(
+                        settings.StartAtSignIn,
+                        settings.StartMinimized,
+                        _shutdown.Token);
+                    ClearRuntimeWarning("startup");
+                },
+                string.Empty,
+                showFailureDialog: true);
+        }
+        finally
+        {
+            SettingsDialogVisibilityChanged?.Invoke(false);
+        }
     }
 
     private void ShowMoreMenu()
@@ -835,9 +868,10 @@ internal partial class MainForm : Form
             return;
         }
 
-        if (_runtimeWarnings.Count > 0)
+        IReadOnlyList<string> runtimeWarningMessages = _runtimeWarnings.Messages;
+        if (runtimeWarningMessages.Count > 0)
         {
-            statusLabel.Text = _runtimeWarnings[0];
+            statusLabel.Text = runtimeWarningMessages[0];
             return;
         }
 
@@ -859,11 +893,12 @@ internal partial class MainForm : Form
             messages.Add(AppStrings.StartupFailure);
         }
 
-        messages.AddRange(_runtimeWarnings);
+        IReadOnlyList<string> runtimeWarningMessages = _runtimeWarnings.Messages;
+        messages.AddRange(runtimeWarningMessages);
         messages.AddRange(_controller.ScanIssues.Take(MaximumDisplayedIssues).Select(GetIssueMessage));
         int totalMessageCount = (_controller.LastFailure is null ? 0 : 1)
             + (_controller.StartupFailure is null ? 0 : 1)
-            + _runtimeWarnings.Count
+            + runtimeWarningMessages.Count
             + _controller.ScanIssues.Count;
         issuesPanel.Visible = totalMessageCount > 0;
         if (totalMessageCount == 0)
@@ -1080,7 +1115,7 @@ internal partial class MainForm : Form
         }
     }
 
-    private void AddRuntimeWarning(string warning)
+    private void UpdateRuntimeWarning(string source, string? warning)
     {
         if (IsDisposed || !IsHandleCreated)
         {
@@ -1091,7 +1126,7 @@ internal partial class MainForm : Form
         {
             try
             {
-                BeginInvoke(new Action(() => AddRuntimeWarning(warning)));
+                BeginInvoke(new Action(() => UpdateRuntimeWarning(source, warning)));
             }
             catch (InvalidOperationException)
             {
@@ -1101,9 +1136,11 @@ internal partial class MainForm : Form
             return;
         }
 
-        if (!_runtimeWarnings.Contains(warning, StringComparer.Ordinal))
+        bool changed = warning is null
+            ? _runtimeWarnings.Clear(source)
+            : _runtimeWarnings.Set(source, warning);
+        if (changed)
         {
-            _runtimeWarnings.Add(warning);
             RefreshView();
         }
     }

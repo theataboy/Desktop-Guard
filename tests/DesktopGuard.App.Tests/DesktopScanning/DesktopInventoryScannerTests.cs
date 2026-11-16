@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using DesktopGuard.App.DesktopScanning;
 using DesktopGuard.Core.DesktopScanning;
 
@@ -88,6 +90,51 @@ public sealed class DesktopInventoryScannerTests
         Assert.IsTrue(GetEntries(result).Single(entry => entry.Name == "Hidden.lnk").IsHidden);
     }
 
+    [TestMethod]
+    public void Scan_IgnoresDirectoryJunctionWithoutMarkingTheRootIncomplete()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string userDesktopPath = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
+        string publicDesktopPath = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string externalDirectory = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "External")).FullName;
+        string junctionPath = Path.Combine(userDesktopPath, "ExternalDirectory");
+        File.WriteAllText(Path.Combine(externalDirectory, "Outside.lnk"), "not in the desktop root");
+        using Process process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            Arguments = $"/c mklink /J \"{junctionPath}\" \"{externalDirectory}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        }) ?? throw new InvalidOperationException("Could not create a temporary directory junction.");
+        process.WaitForExit();
+        Assert.AreEqual(0, process.ExitCode, "The test requires Windows mklink /J support.");
+
+        try
+        {
+            DesktopScanResult result = CreateScanner(userDesktopPath, publicDesktopPath).Scan();
+
+            Assert.IsTrue(result.Inventory.Roots.Single(root => root.RootKind == DesktopRootKind.User).IsComplete);
+            Assert.IsFalse(GetEntries(result).Any(entry => entry.Name == "Outside.lnk"));
+            Assert.IsFalse(result.Issues.Any(issue => issue.RootKind == DesktopRootKind.User
+                && issue.Kind == DesktopScanIssueKind.ReparsePointSkipped));
+        }
+        finally
+        {
+            Directory.Delete(junctionPath);
+        }
+    }
+
+    [TestMethod]
+    public void Scan_KnownFolderComExceptionIsReportedAsUnavailable()
+    {
+        DesktopInventoryScanner scanner = new(new ThrowingDesktopRootProvider());
+
+        DesktopScanResult result = scanner.Scan();
+
+        Assert.IsEmpty(GetEntries(result));
+        Assert.AreEqual(2, result.Issues.Count(issue => issue.Kind == DesktopScanIssueKind.RootUnavailable));
+    }
+
     private static DesktopInventoryScanner CreateScanner(string userRootPath, string publicRootPath)
     {
         return new DesktopInventoryScanner(new FixedDesktopRootProvider(
@@ -118,6 +165,14 @@ public sealed class DesktopInventoryScannerTests
         public IReadOnlyList<DesktopRoot> GetRoots()
         {
             return roots;
+        }
+    }
+
+    private sealed class ThrowingDesktopRootProvider : IDesktopRootProvider
+    {
+        public IReadOnlyList<DesktopRoot> GetRoots()
+        {
+            throw new COMException("Known folder is temporarily unavailable.", unchecked((int)0x80004005));
         }
     }
 

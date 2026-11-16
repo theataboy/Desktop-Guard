@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Microsoft.VisualBasic.FileIO;
 
 namespace DesktopGuard.App.ShortcutManagement;
 
@@ -38,11 +37,7 @@ internal sealed class WindowsShortcutActionExecutor : IShortcutActionExecutor
         CancellationToken cancellationToken)
     {
         return ExecuteWithElevationAsync(
-            () => FileSystem.DeleteFile(
-                path,
-                UIOption.OnlyErrorDialogs,
-                RecycleOption.SendToRecycleBin,
-                UICancelOption.ThrowException),
+            () => RecycleBinFileOperation.Delete(path),
             request,
             cancellationToken,
             () => EnsureFileWasRemoved(path));

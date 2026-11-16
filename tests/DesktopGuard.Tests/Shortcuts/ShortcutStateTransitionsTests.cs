@@ -40,6 +40,18 @@ public sealed class ShortcutStateTransitionsTests
     }
 
     [TestMethod]
+    public void CompleteParking_RemovesOriginalPathFromBaseline()
+    {
+        DesktopGuardState initial = StateWithShortcut(ShortcutStatus.Pending);
+        TrackedShortcut shortcut = initial.Shortcuts.Single();
+
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(initial, shortcut.Id, Guid.NewGuid()), shortcut.Id);
+
+        Assert.IsEmpty(parked.Roots.Single().KnownPaths);
+    }
+
+    [TestMethod]
     public void BeginParking_AllowsPublicShortcut()
     {
         TrackedShortcut publicShortcut = CreateShortcut(DesktopRootKind.Public);
@@ -92,6 +104,9 @@ public sealed class ShortcutStateTransitionsTests
         DesktopGuardState movedPublic = ShortcutStateTransitions.CompleteMove(moving, shortcut.Id);
         Assert.AreEqual(DesktopRootKind.Public, movedPublic.Shortcuts.Single().RootKind);
         Assert.AreEqual(ShortcutStatus.ApprovedVisible, movedPublic.Shortcuts.Single().Status);
+        Assert.IsEmpty(movedPublic.Roots.Single(root => root.RootKind == DesktopRootKind.User).KnownPaths);
+        Assert.Contains(movedPublic.Shortcuts.Single().OriginalPath,
+            movedPublic.Roots.Single(root => root.RootKind == DesktopRootKind.Public).KnownPaths);
 
         DesktopGuardState movingToUser = ShortcutStateTransitions.BeginMove(
             movedPublic,
@@ -105,11 +120,76 @@ public sealed class ShortcutStateTransitionsTests
     }
 
     [TestMethod]
+    public void BeginMove_RejectsTargetPathKnownToDestinationRoot()
+    {
+        TrackedShortcut source = CreateShortcut(DesktopRootKind.Public);
+        string userRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "DesktopGuard.Tests", "User"));
+        string targetPath = Path.Combine(userRoot, source.Name);
+        DesktopGuardState state = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.Public, source.RootPath, true, [source.OriginalPath]),
+                new DesktopRootCheckpoint(DesktopRootKind.User, userRoot, true, [targetPath]),
+            ],
+            Shortcuts = [source],
+        };
+
+        Assert.Throws<InvalidOperationException>(() => ShortcutStateTransitions.BeginMove(
+            state, source.Id, DesktopRootKind.User, userRoot));
+    }
+
+    [TestMethod]
+    public void Validator_RejectsPersistedMoveTargetCollision()
+    {
+        TrackedShortcut source = CreateShortcut(DesktopRootKind.Public) with
+        {
+            Operation = ShortcutOperation.Moving,
+            TargetRootKind = DesktopRootKind.User,
+            TargetRootPath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "DesktopGuard.Tests", "User")),
+            OperationId = Guid.NewGuid(),
+        };
+        string targetPath = Path.Combine(source.TargetRootPath!, source.Name);
+        DesktopGuardState state = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.Public, source.RootPath, true, [source.OriginalPath]),
+                new DesktopRootCheckpoint(DesktopRootKind.User, source.TargetRootPath!, true, [targetPath]),
+            ],
+            Shortcuts = [source],
+        };
+
+        Assert.IsFalse(DesktopStateValidator.IsValid(state));
+    }
+
+    [TestMethod]
+    public void Validator_RejectsUnbaselinedRootWithTrackedShortcut()
+    {
+        TrackedShortcut shortcut = CreateShortcut(DesktopRootKind.User);
+        DesktopGuardState state = new()
+        {
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, shortcut.RootPath, false, [])],
+            Shortcuts = [shortcut],
+        };
+
+        Assert.IsFalse(DesktopStateValidator.IsValid(state));
+    }
+
+    [TestMethod]
     public void MoveBetweenDesktops_PreservesPendingStatus()
     {
         TrackedShortcut shortcut = CreateShortcut(DesktopRootKind.User);
         string publicRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "DesktopGuard.Tests", "Public"));
-        DesktopGuardState state = new() { Shortcuts = [shortcut] };
+        DesktopGuardState state = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.User, shortcut.RootPath, true, [shortcut.OriginalPath]),
+                new DesktopRootCheckpoint(DesktopRootKind.Public, publicRoot, true, []),
+            ],
+            Shortcuts = [shortcut],
+        };
 
         DesktopGuardState movingToPublic = ShortcutStateTransitions.BeginMove(
             state,

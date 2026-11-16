@@ -142,7 +142,7 @@ public sealed class InventoryReconcilerTests
     }
 
     [TestMethod]
-    public void Reconcile_RestoredShortcutKeepsItsExistingDecisionAfterScanWhileParked()
+    public void Reconcile_RestoredShortcutKeepsItsExistingDecisionAndCheckpointAfterRestore()
     {
         string userRoot = CreateRootPath("restored-shortcut");
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -179,7 +179,131 @@ public sealed class InventoryReconcilerTests
         Assert.AreEqual(original.Id, result.State.Shortcuts.Single().Id);
         Assert.AreEqual(ShortcutStatus.ApprovedVisible, result.State.Shortcuts.Single().Status);
         Assert.IsEmpty(result.NewUserShortcuts);
-        Assert.HasCount(1, result.NewEvents);
+        Assert.IsEmpty(result.NewEvents);
+        Assert.Contains(Path.Combine(userRoot, "Existing.lnk"), result.State.Roots.Single().KnownPaths);
+    }
+
+    [TestMethod]
+    public void Reconcile_UnresolvedRestoreClaimsItsOriginalPathWithoutCreatingDuplicate()
+    {
+        string userRoot = CreateRootPath("unresolved-restore");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Restore.lnk"))]),
+            now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, original.Id, Guid.NewGuid()), original.Id);
+        DesktopGuardState afterPark = _reconciler.Reconcile(
+            parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true)]),
+            now.AddMinutes(1)).State;
+        DesktopGuardState restoring = ShortcutStateTransitions.BeginRestore(afterPark, original.Id);
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            restoring,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Restore.lnk"))]),
+            now.AddMinutes(2));
+
+        Assert.AreEqual(original.Id, result.State.Shortcuts.Single().Id);
+        Assert.AreEqual(ShortcutOperation.Restoring, result.State.Shortcuts.Single().Operation);
+        Assert.IsTrue(DesktopStateValidator.IsValid(result.State));
+        Assert.DoesNotContain(Path.Combine(userRoot, "Restore.lnk"), result.State.Roots.Single().KnownPaths);
+    }
+
+    [TestMethod]
+    public void Reconcile_UnresolvedRenameClaimsItsTargetPathWithoutCreatingDuplicate()
+    {
+        string userRoot = CreateRootPath("unresolved-rename");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Before.lnk"))]),
+            now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(baseline, original.Id, "After.lnk");
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            renaming,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Before.lnk"),
+                Entry(DesktopRootKind.User, userRoot, "After.lnk"))]),
+            now.AddMinutes(1));
+
+        Assert.HasCount(1, result.State.Shortcuts);
+        Assert.AreEqual(original.Id, result.State.Shortcuts.Single().Id);
+        Assert.AreEqual(ShortcutOperation.Renaming, result.State.Shortcuts.Single().Operation);
+        Assert.IsTrue(DesktopStateValidator.IsValid(result.State));
+        Assert.DoesNotContain(Path.Combine(userRoot, "After.lnk"), result.State.Roots.Single().KnownPaths);
+    }
+
+    [TestMethod]
+    public void Reconcile_UnresolvedMoveTargetRemainsUnbaselinedUntilOperationIsResolved()
+    {
+        string userRoot = CreateRootPath("unresolved-move-user");
+        string publicRoot = CreateRootPath("unresolved-move-public");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopInventorySnapshot initialSnapshot = new([
+            Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Moving.lnk")),
+            Root(DesktopRootKind.Public, publicRoot, complete: true),
+        ]);
+        DesktopGuardState baseline = _reconciler.Reconcile(new DesktopGuardState(), initialSnapshot, now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopGuardState moving = ShortcutStateTransitions.BeginMove(
+            baseline, original.Id, DesktopRootKind.Public, publicRoot);
+        DesktopInventorySnapshot conflictingSnapshot = new([
+            Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Moving.lnk")),
+            Root(DesktopRootKind.Public, publicRoot, complete: true,
+                Entry(DesktopRootKind.Public, publicRoot, "Moving.lnk")),
+        ]);
+
+        InventoryReconciliation unresolved = _reconciler.Reconcile(
+            moving, conflictingSnapshot, now.AddMinutes(1));
+
+        Assert.IsTrue(DesktopStateValidator.IsValid(unresolved.State));
+        Assert.HasCount(1, unresolved.State.Shortcuts);
+        Assert.IsEmpty(unresolved.NewPublicShortcuts);
+        Assert.IsEmpty(unresolved.NewEvents);
+        Assert.DoesNotContain(Path.Combine(publicRoot, "Moving.lnk"),
+            unresolved.State.Roots.Single(root => root.RootKind == DesktopRootKind.Public).KnownPaths);
+
+        DesktopGuardState canceled = ShortcutStateTransitions.CancelMove(unresolved.State, original.Id);
+        InventoryReconciliation afterCancel = _reconciler.Reconcile(
+            canceled, conflictingSnapshot, now.AddMinutes(2));
+
+        Assert.AreEqual(ShortcutStatus.Pending, afterCancel.NewPublicShortcuts.Single().Status);
+        Assert.IsTrue(DesktopStateValidator.IsValid(afterCancel.State));
+    }
+
+    [TestMethod]
+    public void Reconcile_RecreatedShortcutAfterParkingIsPending()
+    {
+        string userRoot = CreateRootPath("recreated-after-parking");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Parked.lnk"))]),
+            now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, original.Id, Guid.NewGuid()), original.Id);
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Parked.lnk"))]),
+            now.AddMinutes(1));
+
+        TrackedShortcut replacement = result.State.Shortcuts.Single(shortcut => shortcut.Id != original.Id);
+        Assert.AreEqual(ShortcutStatus.Pending, replacement.Status);
+        Assert.Contains(Path.Combine(userRoot, "Parked.lnk"), result.NewUserShortcuts.Select(item => item.OriginalPath));
     }
 
     [TestMethod]

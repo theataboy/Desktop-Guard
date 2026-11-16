@@ -300,9 +300,6 @@
   <data name="PublicDesktop" xml:space="preserve">
     <value>Public Desktop</value>
   </data>
-  <data name="Issues" xml:space="preserve">
-    <value>Scan details</value>
-  </data>
   <data name="RootUnavailableFormat" xml:space="preserve">
     <value>The {0} could not be located.</value>
   </data>
