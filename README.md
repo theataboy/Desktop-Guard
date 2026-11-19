@@ -6,7 +6,7 @@ Desktop Guard (DG) is a Windows 11 system-tray app that watches desktop shortcut
 
 DG monitors `.lnk` and `.url` shortcuts on the signed-in user's Desktop and Public Desktop. The first complete scan establishes each baseline; new shortcuts remain pending until the user reviews them. DG can recognize a recreated shortcut with the same saved launch settings as a still-parked shortcut and automatically re-park it after the configured delay. Recovery duplicates with matching launch fingerprints are removed automatically, keeping the newest last-write date within each Desktop. Desktop file operations remain recovery-aware.
 
-For end-user installation, usage, update, relocation, and removal instructions, see [README.portable.md](README.portable.md). The portable ZIP includes that guide as `README.md`.
+For end-user installation, usage, update, relocation, and removal instructions, see [README.portable.md](README.portable.md). The portable ZIP includes that guide as `README.html` and `README.md`, with the DG icon for the HTML guide.
 
 ## Project structure
 
@@ -15,7 +15,7 @@ For end-user installation, usage, update, relocation, and removal instructions, 
 - `tests/DesktopGuard.Tests` contains Core policy and state tests.
 - `tests/DesktopGuard.App.Tests` contains scanner, persistence, notification-activation, monitor, and temporary-directory file-operation tests.
 - `assets/branding` contains the original icon sheet and selected transparent image. The executable icon is `src/DesktopGuard.App/Resources/DesktopGuard.ico`.
-- `README.portable.md` contains the end-user guide included in the portable ZIP as `README.md`.
+- `README.portable.md` contains the end-user guide included in the portable ZIP as `README.html` and `README.md`.
 - `SECURITY.md` records the threat model and controls; `AGENTS.md` defines repository conventions.
 
 Core has no dependency on the Windows app. Production code does not reference test projects. See `AGENTS.md` for file ownership and security rules.
@@ -44,7 +44,7 @@ Create the portable x64 ZIP with the self-contained executable, portable user gu
 .\scripts\package-portable.ps1
 ```
 
-The script restores in locked mode, publishes the self-contained compressed executable with the .NET and Windows App SDK runtimes, and packages `README.portable.md` as `README.md` in `artifacts/portable/DesktopGuard-win-x64.zip`. The executable is architecture-specific and runs without a separate .NET or Windows App SDK installation. Its bundled files are extracted to the user's `%TEMP%/.net` directory at startup, which increases first-start time. Before distributing a build, run `dotnet package list --vulnerable --include-transitive` and follow the manual Windows 11 release checklist in [SECURITY.md](SECURITY.md). Automated file-operation tests use temporary directories only.
+The script restores in locked mode, publishes the self-contained compressed executable with the .NET and Windows App SDK runtimes, generates a static `README.html` with the DG icon from `README.portable.md`, and packages it with the Markdown guide, icon, and license in `artifacts/portable/DesktopGuard-win-x64.zip`. The executable is architecture-specific and runs without a separate .NET or Windows App SDK installation. Its bundled files are extracted to the user's `%TEMP%/.net` directory at startup, which increases first-start time. Before distributing a build, run `dotnet package list --vulnerable --include-transitive` and follow the manual Windows 11 release checklist in [SECURITY.md](SECURITY.md). Automated file-operation tests use temporary directories only.
 
 ### Prepare a GitHub release
 
