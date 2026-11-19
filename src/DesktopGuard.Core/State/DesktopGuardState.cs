@@ -4,13 +4,15 @@ namespace DesktopGuard.Core.State;
 
 public sealed record DesktopGuardState
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 8;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
     public bool StartAtSignIn { get; init; } = true;
 
     public bool StartMinimized { get; init; } = true;
+
+    public int AutoParkDelayMinutes { get; init; } = 5;
 
     public List<DesktopRootCheckpoint> Roots { get; init; } = [];
 

@@ -6,4 +6,6 @@ public sealed record DesktopInventoryEntry(
     string Path,
     string Name,
     DesktopEntryKind Kind,
-    bool IsHidden = false);
+    bool IsHidden = false,
+    byte[]? ShortcutIdentityHash = null,
+    byte[]? SourceContentHash = null);

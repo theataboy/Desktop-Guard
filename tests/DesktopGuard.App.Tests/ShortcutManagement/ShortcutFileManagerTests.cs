@@ -19,6 +19,8 @@ public sealed class ShortcutFileManagerTests
         string shortcutPath = Path.Combine(desktop, "Program.lnk");
         const string contents = "untrusted shortcut bytes";
         File.WriteAllText(shortcutPath, contents);
+        DateTime originalLastWriteUtc = new(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(shortcutPath, originalLastWriteUtc);
         File.SetAttributes(shortcutPath, File.GetAttributes(shortcutPath) | FileAttributes.Hidden);
         ShortcutFileManager manager = CreateManager(desktop, data);
         TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk") with { IsHidden = true };
@@ -33,6 +35,7 @@ public sealed class ShortcutFileManagerTests
         Assert.IsFalse(File.Exists(shortcutPath));
         Assert.IsTrue(File.Exists(recoveryPath));
         Assert.AreEqual(contents, File.ReadAllText(recoveryPath));
+        Assert.AreEqual(originalLastWriteUtc, File.GetLastWriteTimeUtc(recoveryPath));
         Assert.AreNotEqual((FileAttributes)0, File.GetAttributes(recoveryPath) & FileAttributes.Hidden);
         Assert.AreEqual(
             PendingOperationResolution.OperationMovedFile,
@@ -44,6 +47,7 @@ public sealed class ShortcutFileManagerTests
 
         Assert.IsTrue(File.Exists(shortcutPath));
         Assert.AreEqual(contents, File.ReadAllText(shortcutPath));
+        Assert.AreEqual(originalLastWriteUtc, File.GetLastWriteTimeUtc(shortcutPath));
         Assert.AreEqual((FileAttributes)0, File.GetAttributes(shortcutPath) & FileAttributes.Hidden);
         Assert.IsFalse(File.Exists(recoveryPath));
         Assert.AreEqual(

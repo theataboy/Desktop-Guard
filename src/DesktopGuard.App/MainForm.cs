@@ -490,25 +490,15 @@ internal partial class MainForm : Form
         {
             using SettingsForm settings = new(
                 _controller.State.StartAtSignIn,
-                _controller.State.StartMinimized);
-            if (settings.ShowDialog(this) != DialogResult.OK
-                || settings.StartAtSignIn == _controller.State.StartAtSignIn
-                    && settings.StartMinimized == _controller.State.StartMinimized)
+                _controller.State.StartMinimized,
+                _controller.State.AutoParkDelayMinutes);
+            settings.ApplyRequested += () => ApplySettingsAsync(settings, settings);
+            if (settings.ShowDialog(this) != DialogResult.OK)
             {
                 return;
             }
 
-            await RunCommandAsync(
-                async () =>
-                {
-                    await _controller.SetStartupPreferencesAsync(
-                        settings.StartAtSignIn,
-                        settings.StartMinimized,
-                        _shutdown.Token);
-                    ClearRuntimeWarning("startup");
-                },
-                string.Empty,
-                showFailureDialog: true);
+            await ApplySettingsAsync(settings, this);
         }
         finally
         {
@@ -526,6 +516,38 @@ internal partial class MainForm : Form
         openRecoveryFolderMenuItem.Enabled = _canManage;
         settingsMenuItem.Enabled = _canManage && !_isBusy;
         moreMenu.Show(moreButton, new Point(0, moreButton.Height));
+    }
+
+    private async Task ApplySettingsAsync(SettingsForm settings, IWin32Window failureDialogOwner)
+    {
+        if (!settings.HasChanges)
+        {
+            return;
+        }
+
+        bool startAtSignIn = settings.StartAtSignIn;
+        bool startMinimized = settings.StartMinimized;
+        int autoParkDelayMinutes = settings.AutoParkDelayMinutes;
+        await RunCommandAsync(
+            async () =>
+            {
+                await _controller.SetStartupPreferencesAsync(
+                    startAtSignIn,
+                    startMinimized,
+                    autoParkDelayMinutes,
+                    _shutdown.Token);
+                ClearRuntimeWarning("startup");
+            },
+            string.Empty,
+            showFailureDialog: true,
+            failureDialogOwner);
+
+        if (_controller.State.StartAtSignIn == startAtSignIn
+            && _controller.State.StartMinimized == startMinimized
+            && _controller.State.AutoParkDelayMinutes == autoParkDelayMinutes)
+        {
+            settings.MarkChangesSaved(startAtSignIn, startMinimized, autoParkDelayMinutes);
+        }
     }
 
     private void FilterButton_CheckedChanged(RadioButton button, ShortcutListFilter filter)
@@ -579,6 +601,26 @@ internal partial class MainForm : Form
         }
 
         ShortcutSelectionKey? selectedKey = GetCurrentSelectionKey();
+        if (_controller.RecoveryDuplicateRemovalFailureCount == 0)
+        {
+            _runtimeWarnings.Clear("recovery-duplicates");
+        }
+        else
+        {
+            _runtimeWarnings.Set("recovery-duplicates",
+                AppStrings.RecoveryDuplicateRemovalFailedFormat(_controller.RecoveryDuplicateRemovalFailureCount));
+        }
+        if (_controller.ParkedShortcutsWithoutIdentityCount == 0)
+        {
+            _runtimeWarnings.Clear("shortcut-identity");
+        }
+        else
+        {
+            _runtimeWarnings.Set(
+                "shortcut-identity",
+                AppStrings.ShortcutIdentityUnavailableFormat(_controller.ParkedShortcutsWithoutIdentityCount));
+        }
+
         _isUpdatingView = true;
         try
         {
@@ -727,7 +769,9 @@ internal partial class MainForm : Form
         ShortcutListEntry? selected = selectedRow?.Entry;
         TrackedShortcut? shortcut = selected?.Shortcut;
         bool manageable = shortcut is not null && _controller.IsManageableShortcut(shortcut.Id);
-        bool noOperation = manageable && shortcut!.Operation == ShortcutOperation.None;
+        bool noOperation = manageable
+            && shortcut!.Operation == ShortcutOperation.None
+            && shortcut.Status != ShortcutStatus.ScheduledForAutoParking;
         bool activeShortcut = shortcut?.Status is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible;
         bool canApprove = _canManage && noOperation && shortcut?.Status == ShortcutStatus.Pending;
         bool canPark = _canManage && noOperation && activeShortcut;
@@ -770,7 +814,11 @@ internal partial class MainForm : Form
         CommandAvailabilityChanged?.Invoke();
     }
 
-    private async Task RunCommandAsync(Func<Task> command, string progressMessage, bool showFailureDialog = false)
+    private async Task RunCommandAsync(
+        Func<Task> command,
+        string progressMessage,
+        bool showFailureDialog = false,
+        IWin32Window? failureDialogOwner = null)
     {
         if (!_canManage || _isBusy)
         {
@@ -792,7 +840,7 @@ internal partial class MainForm : Form
             if (showFailureDialog)
             {
                 MessageBox.Show(
-                    this,
+                    failureDialogOwner ?? this,
                     GetFailureMessage(exception),
                     AppStrings.ApplicationTitle,
                     MessageBoxButtons.OK,
@@ -1001,12 +1049,13 @@ internal partial class MainForm : Form
             ShortcutOperation.Creating => AppStrings.CreatingDesktopShortcut,
             ShortcutOperation.Renaming => AppStrings.Renaming,
             ShortcutOperation.DeletingToRecycleBin => AppStrings.MovingToRecycleBin,
-            ShortcutOperation.DeletingPermanently => AppStrings.PermanentlyDeleting,
+            ShortcutOperation.DeletingPermanently or ShortcutOperation.RemovingRecoveryDuplicate => AppStrings.PermanentlyDeleting,
             _ => shortcut.Status switch
             {
                 ShortcutStatus.Pending => AppStrings.PendingReview,
                 ShortcutStatus.ApprovedVisible => AppStrings.ApprovedVisible,
                 ShortcutStatus.Parked => AppStrings.Parked,
+                ShortcutStatus.ScheduledForAutoParking => AppStrings.ScheduledForAutoParking,
                 _ => AppStrings.RecoveryCheckRequired,
             },
         };

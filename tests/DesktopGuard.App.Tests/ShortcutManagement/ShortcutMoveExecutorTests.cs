@@ -12,7 +12,7 @@ public sealed class ShortcutMoveExecutorTests
         RecordingElevationBroker broker = new();
         ShortcutMoveExecutor executor = new(
             broker,
-            (_, _, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
+            (_, _, _, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
         ElevatedShortcutOperationRequest request = CreateRequest();
 
         ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
@@ -26,6 +26,28 @@ public sealed class ShortcutMoveExecutorTests
         Assert.AreEqual(ShortcutFileOperationFailure.ElevationCancelled, exception.Failure);
         Assert.AreEqual(1, broker.CallCount);
         Assert.AreSame(request, broker.LastRequest);
+    }
+
+    [TestMethod]
+    public async Task Move_AutomaticAccessDeniedDoesNotInvokeElevationBroker()
+    {
+        RecordingElevationBroker broker = new();
+        ShortcutMoveExecutor executor = new(
+            broker,
+            (_, _, _, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
+        ElevatedShortcutOperationRequest request = CreateRequest();
+
+        ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => executor.MoveAsync(
+                "source.lnk",
+                "destination.lnk",
+                request.OperationId,
+                request,
+                CancellationToken.None,
+                allowElevation: false));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.AccessDenied, exception.Failure);
+        Assert.AreEqual(0, broker.CallCount);
     }
 
     [TestMethod]
@@ -43,7 +65,7 @@ public sealed class ShortcutMoveExecutorTests
         RecordingElevationBroker broker = new();
         ShortcutMoveExecutor executor = new(
             broker,
-            (_, _, _, _, _) => throw new IOException("sharing violation", unchecked((int)0x80070020)));
+            (_, _, _, _, _, _) => throw new IOException("sharing violation", unchecked((int)0x80070020)));
         ElevatedShortcutOperationRequest request = CreateRequest();
 
         IOException exception = await Assert.ThrowsAsync<IOException>(
@@ -64,7 +86,7 @@ public sealed class ShortcutMoveExecutorTests
         RecordingElevationBroker broker = new();
         ShortcutMoveExecutor executor = new(
             broker,
-            (_, _, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
+            (_, _, _, _, _, _) => throw new IOException("access denied", unchecked((int)0x80070005)));
         ElevatedShortcutOperationRequest request = CreateRequest();
 
         await Assert.ThrowsAsync<ShortcutFileOperationException>(
@@ -94,6 +116,27 @@ public sealed class ShortcutMoveExecutorTests
         Assert.AreEqual(ShortcutFileOperationFailure.DestinationConflict, exception.Failure);
         Assert.IsTrue(File.Exists(sourcePath));
         Assert.IsTrue(File.Exists(destinationPath));
+    }
+
+    [TestMethod]
+    public void Move_ExpectedSourceContentHashMustMatchBeforeTransfer()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string sourcePath = Path.Combine(temporaryDirectory.Path, "source.lnk");
+        string destinationPath = Path.Combine(temporaryDirectory.Path, "Recovery", "source.lnk");
+        File.WriteAllText(sourcePath, "current shortcut bytes");
+        byte[] incorrectHash = System.Security.Cryptography.SHA256.HashData("old shortcut bytes"u8);
+
+        ShortcutFileOperationException exception = Assert.Throws<ShortcutFileOperationException>(() =>
+            ShortcutFileTransfer.Move(
+                sourcePath,
+                destinationPath,
+                Guid.NewGuid(),
+                expectedSourceContentHash: incorrectHash));
+
+        Assert.AreEqual(ShortcutFileOperationFailure.SourceChanged, exception.Failure);
+        Assert.IsTrue(File.Exists(sourcePath));
+        Assert.IsFalse(File.Exists(destinationPath));
     }
 
     [TestMethod]

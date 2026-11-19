@@ -103,6 +103,53 @@ public sealed class InventoryReconciler
                 bool isNew = !previouslyKnownPaths.Contains(entry.Path);
                 TrackedShortcut? activeShortcut = FindActiveShortcut(shortcuts, entry);
 
+                if (activeShortcut is { Status: ShortcutStatus.Pending, Operation: ShortcutOperation.None, AutoParkingEvaluated: false }
+                    && entry.Kind == DesktopEntryKind.Shortcut)
+                {
+                    TrackedShortcut? parkedRule = FindMatchingParkedRule(shortcuts, entry);
+                    int shortcutIndex = shortcuts.FindIndex(shortcut => shortcut.Id == activeShortcut.Id);
+                    if (parkedRule is not null)
+                    {
+                        activeShortcut = activeShortcut with
+                        {
+                            Status = ShortcutStatus.ScheduledForAutoParking,
+                            ShortcutIdentityHash = [.. entry.ShortcutIdentityHash!],
+                            AutoParkingContentHash = [.. entry.SourceContentHash!],
+                            AutoParkingSinceUtc = nowUtc,
+                            AutoParkingEvaluated = true,
+                        };
+                        shortcuts[shortcutIndex] = activeShortcut;
+                    }
+                    else if (CanCompleteAutoParkingEvaluation(shortcuts, entry))
+                    {
+                        activeShortcut = activeShortcut with { AutoParkingEvaluated = true };
+                        shortcuts[shortcutIndex] = activeShortcut;
+                    }
+                }
+
+                if (activeShortcut?.Status == ShortcutStatus.ScheduledForAutoParking
+                    && !IsValidAutoParkingMatch(shortcuts, activeShortcut, entry))
+                {
+                    int shortcutIndex = shortcuts.FindIndex(shortcut => shortcut.Id == activeShortcut.Id);
+                    activeShortcut = activeShortcut with
+                    {
+                        Status = ShortcutStatus.Pending,
+                        AutoParkingSinceUtc = null,
+                        AutoParkingContentHash = null,
+                        ShortcutIdentityHash = null,
+                        AutoParkingEvaluated = true,
+                    };
+                    shortcuts[shortcutIndex] = activeShortcut;
+                    if (rootSnapshot.RootKind == DesktopRootKind.User)
+                    {
+                        newUserShortcuts.Add(activeShortcut);
+                    }
+                    else
+                    {
+                        newPublicShortcuts.Add(activeShortcut);
+                    }
+                }
+
                 if (activeShortcut is not null
                     && activeShortcut.Operation == ShortcutOperation.None
                     && (activeShortcut.IsHidden != entry.IsHidden
@@ -128,13 +175,16 @@ public sealed class InventoryReconciler
                     {
                         if (activeShortcut is null)
                         {
-                            TrackedShortcut shortcut = CreateShortcut(entry, ShortcutStatus.Pending);
+                            TrackedShortcut? parkedRule = FindMatchingParkedRule(shortcuts, entry);
+                            TrackedShortcut shortcut = parkedRule is null
+                                ? CreateShortcut(entry, ShortcutStatus.Pending)
+                                : CreateScheduledShortcut(entry, nowUtc);
                             shortcuts.Add(shortcut);
-                            if (rootSnapshot.RootKind == DesktopRootKind.User)
+                            if (parkedRule is null && rootSnapshot.RootKind == DesktopRootKind.User)
                             {
                                 newUserShortcuts.Add(shortcut);
                             }
-                            else
+                            else if (parkedRule is null)
                             {
                                 newPublicShortcuts.Add(shortcut);
                             }
@@ -196,7 +246,85 @@ public sealed class InventoryReconciler
             StatusBeforeParking: null,
             Operation: ShortcutOperation.None,
             RecoveryFolderId: null,
-            IsHidden: entry.IsHidden);
+            IsHidden: entry.IsHidden,
+            AutoParkingEvaluated: true);
+    }
+
+    private static TrackedShortcut CreateScheduledShortcut(DesktopInventoryEntry entry, DateTimeOffset nowUtc)
+    {
+        byte[] identityHash = entry.ShortcutIdentityHash is { Length: 32 } hash
+            ? hash
+            : throw new InvalidOperationException("A scheduled shortcut requires an identity hash.");
+        TrackedShortcut shortcut = CreateShortcut(entry, ShortcutStatus.ScheduledForAutoParking);
+        return shortcut with
+        {
+            ShortcutIdentityHash = [.. identityHash],
+            AutoParkingSinceUtc = nowUtc,
+            AutoParkingContentHash = [.. entry.SourceContentHash!],
+        };
+    }
+
+    private static bool IsValidAutoParkingMatch(
+        IEnumerable<TrackedShortcut> shortcuts,
+        TrackedShortcut scheduledShortcut,
+        DesktopInventoryEntry entry)
+    {
+        return entry.ShortcutIdentityHash is { Length: 32 } identityHash
+            && scheduledShortcut.ShortcutIdentityHash is { Length: 32 } scheduledHash
+            && scheduledHash.AsSpan().SequenceEqual(identityHash)
+            && entry.SourceContentHash is { Length: 32 } contentHash
+            && scheduledShortcut.AutoParkingContentHash is { Length: 32 } scheduledContentHash
+            && scheduledContentHash.AsSpan().SequenceEqual(contentHash)
+            && FindMatchingParkedRule(shortcuts, entry) is not null;
+    }
+
+    private static TrackedShortcut? FindMatchingParkedRule(
+        IEnumerable<TrackedShortcut> shortcuts,
+        DesktopInventoryEntry entry)
+    {
+        if (entry.ShortcutIdentityHash is not { Length: 32 } identityHash
+            || entry.SourceContentHash is not { Length: 32 })
+        {
+            return null;
+        }
+
+        return shortcuts.FirstOrDefault(shortcut =>
+            shortcut.Status == ShortcutStatus.Parked
+                && shortcut.Operation == ShortcutOperation.None
+                && shortcut.RootKind == entry.RootKind
+                && PathsEqual(shortcut.RootPath, entry.RootPath)
+                && shortcut.ShortcutIdentityHash is { Length: 32 } parkedHash
+                && parkedHash.AsSpan().SequenceEqual(identityHash));
+    }
+
+    private static bool CanCompleteAutoParkingEvaluation(
+        IEnumerable<TrackedShortcut> shortcuts,
+        DesktopInventoryEntry entry)
+    {
+        TrackedShortcut[] parkedInRoot = shortcuts.Where(shortcut =>
+            shortcut.Status == ShortcutStatus.Parked
+                && shortcut.RootKind == entry.RootKind
+                && PathsEqual(shortcut.RootPath, entry.RootPath)).ToArray();
+        if (parkedInRoot.Length == 0)
+        {
+            return true;
+        }
+
+        if (entry.ShortcutIdentityHash is not { Length: 32 } identityHash)
+        {
+            return false;
+        }
+
+        if (parkedInRoot.Any(shortcut =>
+                shortcut.Operation != ShortcutOperation.None
+                    || shortcut.ShortcutIdentityHash is not { Length: 32 }))
+        {
+            return false;
+        }
+
+        bool hasIdentityMatch = parkedInRoot.Any(shortcut =>
+            shortcut.ShortcutIdentityHash!.AsSpan().SequenceEqual(identityHash));
+        return !hasIdentityMatch || entry.SourceContentHash is { Length: 32 };
     }
 
     private static TrackedShortcut? FindActiveShortcut(

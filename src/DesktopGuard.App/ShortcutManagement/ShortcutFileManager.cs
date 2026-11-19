@@ -16,6 +16,7 @@ internal sealed class ShortcutFileManager
     private readonly IShortcutMoveExecutor _moveExecutor;
     private readonly IShortcutActionExecutor _actionExecutor;
     private readonly DesktopShortcutCreator _desktopShortcutCreator;
+    private readonly ShortcutIdentityReader _identityReader;
     private readonly TimeSpan _stabilityInterval;
 
     public ShortcutFileManager(IDesktopRootProvider rootProvider, IDesktopGuardStateStore stateStore)
@@ -43,7 +44,8 @@ internal sealed class ShortcutFileManager
         IShortcutMoveExecutor moveExecutor,
         TimeSpan stabilityInterval,
         IDesktopShortcutLinkWriter? linkWriter = null,
-        IShortcutActionExecutor? actionExecutor = null)
+        IShortcutActionExecutor? actionExecutor = null,
+        ShortcutIdentityReader? identityReader = null)
     {
         ArgumentNullException.ThrowIfNull(rootProvider);
         ArgumentNullException.ThrowIfNull(stateStore);
@@ -57,6 +59,7 @@ internal sealed class ShortcutFileManager
         _stateStore = stateStore;
         _moveExecutor = moveExecutor;
         _actionExecutor = actionExecutor ?? new WindowsShortcutActionExecutor(new WindowsShortcutElevationBroker());
+        _identityReader = identityReader ?? new ShortcutIdentityReader();
         _desktopShortcutCreator = new DesktopShortcutCreator(
             rootProvider,
             linkWriter ?? new WindowsDesktopShortcutLinkWriter());
@@ -96,6 +99,63 @@ internal sealed class ShortcutFileManager
         return ParkCoreAsync(shortcut, allowExistingDestination: false, cancellationToken);
     }
 
+    public Task ParkAutomaticallyAsync(
+        TrackedShortcut shortcut,
+        byte[] expectedSourceContentHash,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(expectedSourceContentHash);
+        return ParkCoreAsync(
+            shortcut,
+            allowExistingDestination: false,
+            cancellationToken: cancellationToken,
+            allowElevation: false,
+            expectedSourceContentHash: expectedSourceContentHash);
+    }
+
+    public ShortcutIdentityReadResult? TryReadDesktopIdentity(DesktopInventoryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        if (entry.Kind != DesktopEntryKind.Shortcut
+            || !DesktopCandidatePolicy.IsValidWindowsFileName(entry.Name)
+            || !DesktopCandidatePolicy.IsDirectChildOf(entry.RootPath, entry.Path)
+            || !string.Equals(Path.GetFileName(entry.Path), entry.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string root = GetCurrentDesktopRoot(entry.RootKind, entry.RootPath);
+        string path = Path.GetFullPath(entry.Path);
+        ValidateRegularFile(path, root);
+        return _identityReader.TryRead(path);
+    }
+
+    public ShortcutIdentityReadResult? TryReadParkedIdentity(TrackedShortcut shortcut)
+    {
+        ArgumentNullException.ThrowIfNull(shortcut);
+        if (shortcut.Status != ShortcutStatus.Parked || shortcut.Operation != ShortcutOperation.None)
+        {
+            return null;
+        }
+
+        string path = GetTrackedShortcutPath(shortcut);
+        return _identityReader.TryRead(path);
+    }
+
+    public ShortcutIdentityReadResult? TryReadRecoveryIdentityForParking(TrackedShortcut shortcut)
+    {
+        ArgumentNullException.ThrowIfNull(shortcut);
+        if (shortcut.Operation != ShortcutOperation.Parking || shortcut.RecoveryFolderId is null)
+        {
+            return null;
+        }
+
+        string recoveryFolder = GetExistingRecoveryFolder(shortcut);
+        string path = BuildRecoveryFilePath(recoveryFolder, shortcut.Name);
+        ValidateRegularFile(path, recoveryFolder);
+        return _identityReader.TryRead(path);
+    }
+
     public Task RestoreAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
     {
         return RestoreCoreAsync(shortcut, allowExistingDestination: false, cancellationToken);
@@ -114,6 +174,26 @@ internal sealed class ShortcutFileManager
     public Task DeleteAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
     {
         return DeleteCoreAsync(shortcut, cancellationToken);
+    }
+
+    public void RemoveRecoveryDuplicate(
+        TrackedShortcut duplicate, ShortcutIdentityReadResult duplicateIdentity,
+        TrackedShortcut keeper, ShortcutIdentityReadResult keeperIdentity)
+    {
+        if (duplicate.Operation != ShortcutOperation.RemovingRecoveryDuplicate
+            || duplicate.Status != ShortcutStatus.Parked || duplicate.OperationId is null
+            || keeper.Operation != ShortcutOperation.None || keeper.Status != ShortcutStatus.Parked
+            || duplicate.RootKind != keeper.RootKind || !PathsEqual(duplicate.RootPath, keeper.RootPath)
+            || !duplicateIdentity.IdentityHash.AsSpan().SequenceEqual(keeperIdentity.IdentityHash))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
+        }
+
+        string duplicatePath = GetTrackedShortcutPath(duplicate);
+        string keeperPath = GetTrackedShortcutPath(keeper);
+        ShortcutFileTransfer.DeleteRecoveryDuplicate(
+            duplicatePath, duplicateIdentity.SourceContentHash, keeperPath, keeperIdentity.SourceContentHash);
+        DeleteEmptyRecoveryFolder(Path.GetDirectoryName(duplicatePath)!);
     }
 
     public Task MakeVisibleAsync(TrackedShortcut shortcut, CancellationToken cancellationToken)
@@ -206,7 +286,7 @@ internal sealed class ShortcutFileManager
             return ResolveInterruptedRename(shortcut);
         }
 
-        if (shortcut.Operation is ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently)
+        if (shortcut.Operation is ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently or ShortcutOperation.RemovingRecoveryDuplicate)
         {
             return ResolveInterruptedDelete(shortcut);
         }
@@ -510,7 +590,9 @@ internal sealed class ShortcutFileManager
     private async Task ParkCoreAsync(
         TrackedShortcut shortcut,
         bool allowExistingDestination,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowElevation = true,
+        byte[]? expectedSourceContentHash = null)
     {
         ValidatePendingOperation(shortcut, ShortcutOperation.Parking);
         string root = GetCurrentDesktopRoot(shortcut.RootKind, shortcut.RootPath);
@@ -527,7 +609,16 @@ internal sealed class ShortcutFileManager
             shortcut.Name,
             shortcut.RootKind,
             DestinationRootKind: null);
-        await MoveAsync(sourcePath, destinationPath, recoveryFolder, request, shortcut.OperationId.Value, allowExistingDestination, cancellationToken)
+        await MoveAsync(
+                sourcePath,
+                destinationPath,
+                recoveryFolder,
+                request,
+                shortcut.OperationId.Value,
+                allowExistingDestination,
+                cancellationToken,
+                allowElevation,
+                expectedSourceContentHash)
             .ConfigureAwait(false);
     }
 
@@ -604,7 +695,9 @@ internal sealed class ShortcutFileManager
         ElevatedShortcutOperationRequest request,
         Guid operationId,
         bool allowExistingDestination,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowElevation = true,
+        byte[]? expectedSourceContentHash = null)
     {
         try
         {
@@ -633,7 +726,9 @@ internal sealed class ShortcutFileManager
                     destinationPath,
                     operationId,
                     request,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    allowElevation,
+                    expectedSourceContentHash).ConfigureAwait(false);
             }
 
             ValidateRegularFile(destinationPath, destinationRoot);

@@ -7,7 +7,9 @@ internal interface IShortcutMoveExecutor
         string destinationPath,
         Guid operationId,
         ElevatedShortcutOperationRequest elevatedRequest,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        bool allowElevation = true,
+        byte[]? expectedSourceContentHash = null);
 
     Task RetryAsync(
         string sourcePath,

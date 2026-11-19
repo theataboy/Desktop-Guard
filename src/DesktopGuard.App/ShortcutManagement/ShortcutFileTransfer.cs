@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 
 namespace DesktopGuard.App.ShortcutManagement;
@@ -27,9 +28,15 @@ internal static class ShortcutFileTransfer
         Guid operationId,
         bool allowExistingDestination = false,
         bool preserveHidden = false,
-        Action? beforeSourceDeletion = null)
+        Action? beforeSourceDeletion = null,
+        byte[]? expectedSourceContentHash = null)
     {
         if (operationId == Guid.Empty)
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
+        }
+
+        if (expectedSourceContentHash is not null && expectedSourceContentHash.Length != 32)
         {
             throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
         }
@@ -38,13 +45,34 @@ internal static class ShortcutFileTransfer
             sourcePath,
             GenericRead | DeleteAccess | WriteAttributes,
             out FileAttributes sourceAttributes);
+        DateTime sourceLastWriteUtc = File.GetLastWriteTimeUtc(source.SafeFileHandle);
+        if (expectedSourceContentHash is not null)
+        {
+            if (source.Length is < 1 or > 1024 * 1024)
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
+            }
+
+            source.Position = 0;
+            byte[] actualHash = SHA256.HashData(source);
+            source.Position = 0;
+            if (!CryptographicOperations.FixedTimeEquals(actualHash, expectedSourceContentHash))
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
+            }
+        }
+
         string operationDirectory = GetOperationDirectory(destinationPath, operationId);
         if (File.Exists(destinationPath))
         {
-            using FileStream existingDestination = OpenComparisonFile(destinationPath);
+            using FileStream existingDestination = OpenVerifiedFile(
+                destinationPath,
+                GenericRead | WriteAttributes,
+                out _);
             if ((allowExistingDestination || IsEmptyOperationDirectory(operationDirectory))
                 && FilesAreEqual(source, existingDestination))
             {
+                File.SetLastWriteTimeUtc(existingDestination.SafeFileHandle, sourceLastWriteUtc);
                 UpdateHiddenAttribute(destinationPath, sourceAttributes, preserveHidden);
                 beforeSourceDeletion?.Invoke();
                 DeleteSourceByHandle(source.SafeFileHandle);
@@ -71,7 +99,7 @@ internal static class ShortcutFileTransfer
         File.SetAttributes(operationDirectory, directoryAttributes | FileAttributes.Hidden);
 
         string temporaryPath = Path.Combine(operationDirectory, TemporaryFileName);
-        CopyToNewFile(source, temporaryPath);
+        CopyToNewFile(source, temporaryPath, sourceLastWriteUtc);
         using (FileStream temporary = OpenComparisonFile(temporaryPath))
         {
             if (!FilesAreEqual(source, temporary))
@@ -112,6 +140,56 @@ internal static class ShortcutFileTransfer
         catch (DirectoryNotFoundException)
         {
         }
+    }
+
+    internal static byte[]? ReadBoundedContent(string path, int maximumLength, out DateTimeOffset lastWriteUtc)
+    {
+        if (maximumLength is < 1 or > 1024 * 1024)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumLength));
+        }
+
+        using FileStream source = OpenVerifiedFile(path, GenericRead, out _);
+        lastWriteUtc = File.GetLastWriteTimeUtc(source.SafeFileHandle);
+        if (source.Length is < 1 || source.Length > maximumLength)
+        {
+            return null;
+        }
+
+        byte[] bytes = GC.AllocateUninitializedArray<byte>((int)source.Length);
+        source.Position = 0;
+        source.ReadExactly(bytes);
+        if (source.ReadByte() != -1 || source.Length != bytes.Length)
+        {
+            return null;
+        }
+
+        return bytes;
+    }
+
+    internal static void DeleteRecoveryDuplicate(
+        string duplicatePath,
+        byte[] expectedDuplicateHash,
+        string keeperPath,
+        byte[] expectedKeeperHash)
+    {
+        if (PathsEqual(duplicatePath, keeperPath)
+            || expectedDuplicateHash.Length != 32 || expectedKeeperHash.Length != 32)
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.InvalidState);
+        }
+
+        // Lock the retained copy first. Both hashes must still describe the freshly parsed files.
+        using FileStream keeper = OpenVerifiedFile(keeperPath, GenericRead, out _);
+        using FileStream duplicate = OpenVerifiedFile(duplicatePath, GenericRead | DeleteAccess, out _);
+        if (keeper.Length is < 1 or > 1024 * 1024 || duplicate.Length is < 1 or > 1024 * 1024
+            || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(keeper), expectedKeeperHash)
+            || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(duplicate), expectedDuplicateHash))
+        {
+            throw new ShortcutFileOperationException(ShortcutFileOperationFailure.SourceChanged);
+        }
+
+        DeleteSourceByHandle(duplicate.SafeFileHandle);
     }
 
     public static bool IsAccessDenied(Exception exception)
@@ -234,7 +312,7 @@ internal static class ShortcutFileTransfer
         File.SetAttributes(path, attributes);
     }
 
-    private static void CopyToNewFile(FileStream source, string temporaryPath)
+    private static void CopyToNewFile(FileStream source, string temporaryPath, DateTime sourceLastWriteUtc)
     {
         try
         {
@@ -247,6 +325,8 @@ internal static class ShortcutFileTransfer
                 BufferSize,
                 FileOptions.WriteThrough);
             source.CopyTo(destination, BufferSize);
+            destination.Flush(flushToDisk: true);
+            File.SetLastWriteTimeUtc(destination.SafeFileHandle, sourceLastWriteUtc);
             destination.Flush(flushToDisk: true);
         }
         catch (ShortcutFileOperationException)

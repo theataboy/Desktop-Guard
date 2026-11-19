@@ -18,4 +18,8 @@ public sealed record TrackedShortcut(
     byte[]? OperationContentHash = null,
     string? TargetName = null,
     bool IsHidden = false,
-    bool IsDesktopGuardShortcut = false);
+    bool IsDesktopGuardShortcut = false,
+    byte[]? ShortcutIdentityHash = null,
+    DateTimeOffset? AutoParkingSinceUtc = null,
+    byte[]? AutoParkingContentHash = null,
+    bool AutoParkingEvaluated = false);

@@ -14,6 +14,315 @@ namespace DesktopGuard.App.Tests.Application;
 public sealed class DesktopGuardControllerTests
 {
     [TestMethod]
+    public void Initialize_BackfillsParkedShortcutIdentityWithoutMovingRecoveryFile()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string recovery = Path.Combine(data, "Recovery");
+        string name = "Creality Print.url";
+        Guid recoveryFolderId = Guid.NewGuid();
+        string recoveryFolder = Directory.CreateDirectory(Path.Combine(recovery, recoveryFolderId.ToString("N"))).FullName;
+        string recoveryPath = Path.Combine(recoveryFolder, name);
+        File.WriteAllText(recoveryPath, "[InternetShortcut]\r\nURL=https://example.invalid/creality\r\n");
+        TrackedShortcut parked = new(
+            Guid.NewGuid(),
+            DesktopRootKind.User,
+            desktop,
+            name,
+            Path.Combine(desktop, name),
+            ShortcutStatus.Parked,
+            StatusBeforeParking: ShortcutStatus.Pending,
+            Operation: ShortcutOperation.None,
+            RecoveryFolderId: recoveryFolderId);
+        DesktopGuardStateStore stateStore = new(data);
+        stateStore.Save(new DesktopGuardState
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, []),
+                new DesktopRootCheckpoint(DesktopRootKind.Public, publicDesktop, true, []),
+            ],
+            Shortcuts = [parked],
+        });
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager fileManager = new(rootProvider, stateStore, TimeSpan.Zero);
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            fileManager,
+            new NoOpStartAtSignInManager(),
+            notifications);
+
+        controller.Initialize();
+
+        TrackedShortcut updated = controller.State.Shortcuts.Single();
+        Assert.IsNotNull(updated.ShortcutIdentityHash);
+        Assert.HasCount(32, updated.ShortcutIdentityHash);
+        Assert.IsTrue(File.Exists(recoveryPath));
+        Assert.AreEqual(0, controller.ParkedShortcutsWithoutIdentityCount);
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public void Initialize_RemovesOlderRecoveryDuplicateAndReconcilesInterruptedCleanup(bool interrupted, bool alreadyRemoved)
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        DesktopGuardStateStore store = new(Path.Combine(temporaryDirectory.Path, "Data"));
+        Guid oldFolder = Guid.NewGuid();
+        Guid newFolder = Guid.NewGuid();
+        string oldPath = Path.Combine(Directory.CreateDirectory(Path.Combine(store.RecoveryDirectoryPath, oldFolder.ToString("N"))).FullName, "Old.url");
+        string newPath = Path.Combine(Directory.CreateDirectory(Path.Combine(store.RecoveryDirectoryPath, newFolder.ToString("N"))).FullName, "New.url");
+        File.WriteAllText(oldPath, "[InternetShortcut]\r\nURL=https://example.invalid/app\r\nIconIndex=1");
+        File.WriteAllText(newPath, "[InternetShortcut]\nURL=https://example.invalid/app\nIconIndex=2");
+        File.SetLastWriteTimeUtc(oldPath, DateTime.UtcNow.AddDays(-1));
+        byte[] identity = new ShortcutIdentityReader().TryRead(newPath)!.IdentityHash;
+        TrackedShortcut old = new(Guid.NewGuid(), DesktopRootKind.User, desktop, "Old.url", Path.Combine(desktop, "Old.url"),
+            ShortcutStatus.Parked, ShortcutStatus.Pending, ShortcutOperation.None, oldFolder, ShortcutIdentityHash: identity);
+        TrackedShortcut keeper = old with
+        {
+            Id = Guid.NewGuid(),
+            Name = "New.url",
+            OriginalPath = Path.Combine(desktop, "New.url"),
+            RecoveryFolderId = newFolder,
+        };
+        DesktopGuardState state = new()
+        {
+            Roots = [new(DesktopRootKind.User, desktop, true, []), new(DesktopRootKind.Public, publicDesktop, true, [])],
+            Shortcuts = [old, keeper],
+        };
+        if (interrupted)
+        {
+            state = ShortcutStateTransitions.BeginRecoveryDuplicateRemoval(state, old.Id, keeper.Id);
+        }
+
+        store.Save(state);
+        if (alreadyRemoved)
+        {
+            File.Delete(oldPath);
+            Directory.Delete(Path.GetDirectoryName(oldPath)!);
+        }
+
+        FixedDesktopRootProvider roots = new(desktop, publicDesktop);
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(new DesktopInventoryScanner(roots), new InventoryReconciler(), store,
+            new ShortcutFileManager(roots, store, TimeSpan.Zero), new NoOpStartAtSignInManager(), notifications);
+
+        controller.Initialize();
+
+        Assert.AreEqual(keeper.Id, store.Load().Shortcuts.Single().Id);
+        Assert.IsTrue(File.Exists(newPath));
+        Assert.IsFalse(File.Exists(oldPath));
+        Assert.AreEqual(0, controller.RecoveryDuplicateRemovalFailureCount);
+    }
+
+    [TestMethod]
+    public async Task Refresh_RotatesRecoveryDuplicateReadBatchPastLockedShortcuts()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        DesktopGuardStateStore store = new(Path.Combine(temporaryDirectory.Path, "Data"));
+        const int lockedCount = 64;
+        const int accessibleCount = 2;
+        const string url = "https://example.invalid/same-app";
+        string identityFile = CreateIdentityFile(temporaryDirectory.Path, url);
+        byte[] identity = new ShortcutIdentityReader().TryRead(identityFile)!.IdentityHash;
+        File.Delete(identityFile);
+        List<TrackedShortcut> shortcuts = [];
+        List<string> accessiblePaths = [];
+
+        for (int index = 0; index < lockedCount + accessibleCount; index++)
+        {
+            Guid folderId = Guid.NewGuid();
+            string folder = Directory.CreateDirectory(
+                Path.Combine(store.RecoveryDirectoryPath, folderId.ToString("N"))).FullName;
+            string name = $"Copy {index:D2}.url";
+            string recoveryPath = Path.Combine(folder, name);
+            File.WriteAllText(recoveryPath, $"[InternetShortcut]\nURL={url}\nIconIndex={index}");
+            File.SetLastWriteTimeUtc(recoveryPath, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(index));
+            if (index >= lockedCount)
+            {
+                accessiblePaths.Add(recoveryPath);
+            }
+
+            shortcuts.Add(new TrackedShortcut(Guid.NewGuid(), DesktopRootKind.User, desktop, name,
+                Path.Combine(desktop, name), ShortcutStatus.Parked, ShortcutStatus.Pending,
+                ShortcutOperation.None, folderId, ShortcutIdentityHash: identity));
+        }
+
+        List<FileStream> locks = [];
+        try
+        {
+            foreach (TrackedShortcut shortcut in shortcuts.Take(lockedCount))
+            {
+                string path = Path.Combine(store.RecoveryDirectoryPath,
+                    shortcut.RecoveryFolderId!.Value.ToString("N"), shortcut.Name);
+                locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None));
+            }
+
+            store.Save(new DesktopGuardState
+            {
+                Roots =
+                [
+                    new(DesktopRootKind.User, desktop, true, []),
+                    new(DesktopRootKind.Public, publicDesktop, true, []),
+                ],
+                Shortcuts = shortcuts,
+            });
+            FixedDesktopRootProvider roots = new(desktop, publicDesktop);
+            using WindowsNotificationService notifications = new();
+            DesktopGuardController controller = new(new DesktopInventoryScanner(roots), new InventoryReconciler(), store,
+                new ShortcutFileManager(roots, store, TimeSpan.Zero), new NoOpStartAtSignInManager(), notifications);
+
+            controller.Initialize();
+            Assert.IsTrue(accessiblePaths.All(File.Exists));
+
+            await controller.RefreshAsync(CancellationToken.None, showNotifications: false);
+
+            Assert.IsFalse(File.Exists(accessiblePaths[0]));
+            Assert.IsTrue(File.Exists(accessiblePaths[1]));
+            Assert.HasCount(lockedCount + 1, controller.State.Shortcuts);
+        }
+        finally
+        {
+            foreach (FileStream fileLock in locks)
+            {
+                fileLock.Dispose();
+            }
+        }
+
+        static string CreateIdentityFile(string root, string value)
+        {
+            string path = Path.Combine(root, $"identity-{Guid.NewGuid():N}.url");
+            File.WriteAllText(path, $"[InternetShortcut]\nURL={value}\n");
+            return path;
+        }
+    }
+
+    [TestMethod]
+    public async Task Park_ExistingFingerprintKeepsOneRecoveryCopy()
+    {
+        using TemporaryDirectory directory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(directory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(directory.Path, "Public")).FullName;
+        DesktopGuardStateStore store = new(Path.Combine(directory.Path, "Data"));
+        Guid recoveryId = Guid.NewGuid();
+        string recoveryPath = Path.Combine(Directory.CreateDirectory(Path.Combine(store.RecoveryDirectoryPath, recoveryId.ToString("N"))).FullName, "Old.url");
+        File.WriteAllText(recoveryPath, "[InternetShortcut]\nURL=https://example.invalid/app\n");
+        File.SetLastWriteTimeUtc(recoveryPath, DateTime.UtcNow.AddDays(-1));
+        string desktopPath = Path.Combine(desktop, "New.url");
+        File.WriteAllText(desktopPath, "[InternetShortcut]\r\nURL=https://example.invalid/app\r\n");
+        TrackedShortcut old = new(Guid.NewGuid(), DesktopRootKind.User, desktop, "Old.url", Path.Combine(desktop, "Old.url"),
+            ShortcutStatus.Parked, ShortcutStatus.Pending, ShortcutOperation.None, recoveryId);
+        TrackedShortcut pending = new(Guid.NewGuid(), DesktopRootKind.User, desktop, "New.url", desktopPath,
+            ShortcutStatus.Pending, null, ShortcutOperation.None, null, AutoParkingEvaluated: true);
+        store.Save(new DesktopGuardState
+        {
+            Roots = [new(DesktopRootKind.User, desktop, true, [desktopPath]), new(DesktopRootKind.Public, publicDesktop, true, [])],
+            Shortcuts = [old, pending],
+        });
+        FixedDesktopRootProvider roots = new(desktop, publicDesktop);
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager manager = new(roots, store, new NoElevationMoveExecutor(), TimeSpan.Zero);
+        DesktopGuardController controller = new(new DesktopInventoryScanner(roots), new InventoryReconciler(), store,
+            manager, new NoOpStartAtSignInManager(), notifications);
+        controller.Initialize();
+
+        await controller.ParkAsync(pending.Id, CancellationToken.None);
+
+        TrackedShortcut kept = store.Load().Shortcuts.Single();
+        Assert.AreEqual(pending.Id, kept.Id);
+        Assert.AreEqual(ShortcutStatus.Parked, kept.Status);
+        Assert.IsFalse(File.Exists(recoveryPath));
+        Assert.IsFalse(File.Exists(desktopPath));
+        Assert.IsTrue(File.Exists(manager.GetRecoveryFilePath(kept)));
+    }
+
+    [TestMethod]
+    public void Initialize_AutoParksMatureMatchingShortcutWithoutElevation()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string name = "Creality Print.url";
+        string shortcutPath = Path.Combine(desktop, name);
+        File.WriteAllText(shortcutPath, "[InternetShortcut]\r\nURL=https://example.invalid/creality\r\n");
+        ShortcutIdentityReadResult identity = new ShortcutIdentityReader().TryRead(shortcutPath)!;
+        Assert.IsNotNull(identity);
+
+        Guid recoveryFolderId = Guid.NewGuid();
+        string recoveryFolder = Directory.CreateDirectory(
+            Path.Combine(data, "Recovery", recoveryFolderId.ToString("N"))).FullName;
+        string recoveryPath = Path.Combine(recoveryFolder, "Previously Parked.url");
+        File.WriteAllText(recoveryPath, "[InternetShortcut]\nURL=https://example.invalid/creality\n");
+        File.SetLastWriteTimeUtc(recoveryPath, DateTime.UtcNow.AddDays(-1));
+        TrackedShortcut parkedRule = new(
+            Guid.NewGuid(),
+            DesktopRootKind.User,
+            desktop,
+            "Previously Parked.url",
+            Path.Combine(desktop, "Previously Parked.url"),
+            ShortcutStatus.Parked,
+            StatusBeforeParking: ShortcutStatus.Pending,
+            Operation: ShortcutOperation.None,
+            RecoveryFolderId: recoveryFolderId,
+            ShortcutIdentityHash: identity.IdentityHash);
+        TrackedShortcut scheduled = new(
+            Guid.NewGuid(),
+            DesktopRootKind.User,
+            desktop,
+            name,
+            shortcutPath,
+            ShortcutStatus.ScheduledForAutoParking,
+            StatusBeforeParking: null,
+            Operation: ShortcutOperation.None,
+            RecoveryFolderId: null,
+            ShortcutIdentityHash: identity.IdentityHash,
+            AutoParkingSinceUtc: DateTimeOffset.UtcNow.AddMinutes(-3),
+            AutoParkingContentHash: identity.SourceContentHash);
+        DesktopGuardStateStore stateStore = new(data);
+        stateStore.Save(new DesktopGuardState
+        {
+            AutoParkDelayMinutes = 2,
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [shortcutPath]),
+                new DesktopRootCheckpoint(DesktopRootKind.Public, publicDesktop, true, []),
+            ],
+            Shortcuts = [parkedRule, scheduled],
+        });
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        NoElevationMoveExecutor moveExecutor = new();
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager fileManager = new(rootProvider, stateStore, moveExecutor, TimeSpan.Zero);
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            fileManager,
+            new NoOpStartAtSignInManager(),
+            notifications);
+
+        controller.Initialize();
+
+        TrackedShortcut autoParked = controller.State.Shortcuts.Single(shortcut => shortcut.Id == scheduled.Id);
+        Assert.AreEqual(ShortcutStatus.Parked, autoParked.Status);
+        Assert.AreEqual(ShortcutStatus.Pending, autoParked.StatusBeforeParking);
+        Assert.IsFalse(File.Exists(shortcutPath));
+        Assert.IsTrue(File.Exists(fileManager.GetRecoveryFilePath(autoParked)));
+        Assert.IsFalse(moveExecutor.AllowElevationWasRequested);
+    }
+
+    [TestMethod]
     public async Task Park_WhenCompletionSaveFails_ReconcilesMovedFileAndPreservesRecoveryRecord()
     {
         using TemporaryDirectory temporaryDirectory = new();
@@ -565,6 +874,40 @@ public sealed class DesktopGuardControllerTests
         public void Create(string linkPath, string targetPath)
         {
             throw new IOException("The test link writer failed.");
+        }
+    }
+
+    private sealed class NoElevationMoveExecutor : IShortcutMoveExecutor
+    {
+        public bool AllowElevationWasRequested { get; private set; }
+
+        public Task MoveAsync(
+            string sourcePath,
+            string destinationPath,
+            Guid operationId,
+            ElevatedShortcutOperationRequest elevatedRequest,
+            CancellationToken cancellationToken,
+            bool allowElevation = true,
+            byte[]? expectedSourceContentHash = null)
+        {
+            AllowElevationWasRequested = allowElevation;
+            ShortcutFileTransfer.Move(
+                sourcePath,
+                destinationPath,
+                operationId,
+                preserveHidden: elevatedRequest.Kind == ElevatedShortcutOperationKind.ParkToRecovery,
+                expectedSourceContentHash: expectedSourceContentHash);
+            return Task.CompletedTask;
+        }
+
+        public Task RetryAsync(
+            string sourcePath,
+            string destinationPath,
+            Guid operationId,
+            ElevatedShortcutOperationRequest elevatedRequest,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
         }
     }
 

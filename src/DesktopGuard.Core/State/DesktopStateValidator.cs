@@ -44,6 +44,16 @@ public static class DesktopStateValidator
         return IsValidForVersion(state, 5, legacyVersionOne: false, allowCreating: true, allowExtendedOperations: true);
     }
 
+    public static bool IsValidVersionSix(DesktopGuardState state)
+    {
+        return IsValidForVersion(state, 6, legacyVersionOne: false, allowCreating: true, allowExtendedOperations: true);
+    }
+
+    public static bool IsValidVersionSeven(DesktopGuardState state)
+    {
+        return IsValidForVersion(state, 7, legacyVersionOne: false, allowCreating: true, allowExtendedOperations: true);
+    }
+
     private static bool IsValidForVersion(
         DesktopGuardState state,
         int schemaVersion,
@@ -57,6 +67,7 @@ public static class DesktopStateValidator
             || state.Shortcuts is null
             || state.Events is null
             || state.SchemaVersion != schemaVersion
+            || state.AutoParkDelayMinutes is < 2 or > 30
             || state.Roots.Count > MaximumRoots
             || state.Shortcuts.Count > MaximumShortcuts
             || state.Events.Count > InventoryReconciler.MaximumEventCount)
@@ -138,6 +149,12 @@ public static class DesktopStateValidator
             return false;
         }
 
+        if (state.Shortcuts.Any(shortcut => shortcut.Status == ShortcutStatus.ScheduledForAutoParking
+                && !state.Shortcuts.Any(rule => IsMatchingParkedRule(rule, shortcut))))
+        {
+            return false;
+        }
+
         return state.Events.All(desktopEvent => desktopEvent is not null && IsValidEvent(desktopEvent));
     }
 
@@ -162,6 +179,7 @@ public static class DesktopStateValidator
         bool allowExtendedOperations)
     {
         bool isParked = shortcut.Status == ShortcutStatus.Parked;
+        bool isScheduledForAutoParking = shortcut.Status == ShortcutStatus.ScheduledForAutoParking;
         bool hasRecoveryFolder = shortcut.RecoveryFolderId is not null;
         bool previousStatusIsValid = shortcut.StatusBeforeParking is null
             || shortcut.StatusBeforeParking is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible;
@@ -247,7 +265,8 @@ public static class DesktopStateValidator
                 && shortcut.TargetRootKind is null
                 && shortcut.TargetRootPath is null
                 && shortcut.TargetName is null,
-            ShortcutOperation.DeletingPermanently => allowExtendedOperations
+            ShortcutOperation.DeletingPermanently or ShortcutOperation.RemovingRecoveryDuplicate => allowExtendedOperations
+                && (shortcut.Operation != ShortcutOperation.RemovingRecoveryDuplicate || schemaVersion >= 8)
                 && isParked
                 && hasRecoveryFolder
                 && shortcut.StatusBeforeParking is not null
@@ -269,13 +288,30 @@ public static class DesktopStateValidator
                     && shortcut.TargetRootPath is null
                     && shortcut.OperationId is null)
             && (!legacyVersionOne || shortcut.OperationContentHash is null)
-            && (schemaVersion >= DesktopGuardState.CurrentSchemaVersion || !shortcut.IsDesktopGuardShortcut)
+            && (schemaVersion >= 6 || !shortcut.IsDesktopGuardShortcut)
             && (!shortcut.IsDesktopGuardShortcut || shortcut.RootKind == DesktopRootKind.User)
-            && (schemaVersion < DesktopGuardState.CurrentSchemaVersion
+            && (schemaVersion < 6
                 || shortcut.Operation != ShortcutOperation.Creating
                 || shortcut.IsDesktopGuardShortcut)
             && (allowExtendedOperations || shortcut.TargetName is null)
-            && shortcut.Status is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible or ShortcutStatus.Parked
+            && (shortcut.Status is ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible or ShortcutStatus.Parked
+                || schemaVersion >= 7 && isScheduledForAutoParking)
+            && (schemaVersion >= 8 || !shortcut.AutoParkingEvaluated)
+            && (schemaVersion >= 7
+                ? (shortcut.ShortcutIdentityHash is null || shortcut.ShortcutIdentityHash.Length == 32)
+                    && (shortcut.AutoParkingContentHash is null || shortcut.AutoParkingContentHash.Length == 32)
+                    && (isScheduledForAutoParking
+                        ? shortcut.ShortcutIdentityHash is { Length: 32 }
+                            && shortcut.AutoParkingSinceUtc is DateTimeOffset sinceUtc
+                            && sinceUtc.Offset == TimeSpan.Zero
+                            && shortcut.Operation == ShortcutOperation.None
+                            && shortcut.StatusBeforeParking is null
+                            && !hasRecoveryFolder
+                        : shortcut.AutoParkingSinceUtc is null && shortcut.AutoParkingContentHash is null)
+                : shortcut.ShortcutIdentityHash is null
+                    && shortcut.AutoParkingSinceUtc is null
+                    && shortcut.AutoParkingContentHash is null
+                    && !isScheduledForAutoParking)
             && previousStatusIsValid
             && Enum.IsDefined(shortcut.Operation)
             && IsBoundedAbsolutePath(shortcut.RootPath)
@@ -288,6 +324,17 @@ public static class DesktopStateValidator
                 shortcut.Name,
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
             && operationIsValid;
+    }
+
+    private static bool IsMatchingParkedRule(TrackedShortcut rule, TrackedShortcut scheduledShortcut)
+    {
+        return rule.Status == ShortcutStatus.Parked
+            && rule.Operation is ShortcutOperation.None or ShortcutOperation.Renaming
+            && rule.RootKind == scheduledShortcut.RootKind
+            && PathsEqual(rule.RootPath, scheduledShortcut.RootPath)
+            && rule.ShortcutIdentityHash is { Length: 32 } ruleHash
+            && scheduledShortcut.ShortcutIdentityHash is { Length: 32 } scheduledHash
+            && ruleHash.AsSpan().SequenceEqual(scheduledHash);
     }
 
     private static bool IsValidEvent(DesktopEvent desktopEvent)

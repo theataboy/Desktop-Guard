@@ -13,6 +13,8 @@ namespace DesktopGuard.App.Application;
 internal sealed class DesktopGuardController
 {
     private const int MaximumNotificationsPerScan = 5;
+    private const long MaximumIdentityReadBytesPerScan = 64 * 1024 * 1024;
+    private const long MaximumIdentityBackfillBytes = 64 * 1024 * 1024;
 
     private readonly DesktopInventoryScanner _scanner;
     private readonly InventoryReconciler _reconciler;
@@ -28,6 +30,7 @@ internal sealed class DesktopGuardController
     private IReadOnlyList<DesktopScanIssue> _scanIssues = [];
     private Exception? _lastFailure;
     private Exception? _startupFailure;
+    private Guid? _nextRecoveryDuplicateCandidateId;
 
     public DesktopGuardController(
         DesktopInventoryScanner scanner,
@@ -106,6 +109,11 @@ internal sealed class DesktopGuardController
 
     public string RecoveryDirectoryPath => _stateStore.RecoveryDirectoryPath;
 
+    public int ParkedShortcutsWithoutIdentityCount => _state.Shortcuts.Count(shortcut =>
+        shortcut.Status == ShortcutStatus.Parked && shortcut.ShortcutIdentityHash is null);
+
+    public int RecoveryDuplicateRemovalFailureCount { get; private set; }
+
     public bool CanAddDesktopShortcut
     {
         get
@@ -181,6 +189,7 @@ internal sealed class DesktopGuardController
     {
         _state = _stateStore.Load();
         ResolveInterruptedOperations();
+        BackfillParkedShortcutIdentities();
 
         RefreshAsync(CancellationToken.None, showNotifications: true).GetAwaiter().GetResult();
 
@@ -199,14 +208,22 @@ internal sealed class DesktopGuardController
     public async Task RefreshAsync(CancellationToken cancellationToken, bool showNotifications = true)
     {
         InventoryReconciliation? reconciliation = null;
+        List<TrackedShortcut> autoParkingFailures = [];
+        int removedDuplicates = 0;
         await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             DesktopScanResult scanResult = await Task.Run(_scanner.Scan, cancellationToken).ConfigureAwait(false);
-            reconciliation = _reconciler.Reconcile(_state, scanResult.Inventory, DateTimeOffset.UtcNow);
+            DateTimeOffset nowUtc = DateTimeOffset.UtcNow;
+            (DesktopInventorySnapshot inventory, Dictionary<string, ShortcutIdentityReadResult> identities) =
+                EnrichSnapshotWithShortcutIdentities(scanResult.Inventory);
+            reconciliation = _reconciler.Reconcile(_state, inventory, nowUtc);
             _stateStore.Save(reconciliation.State);
             _state = reconciliation.State;
-            _inventory = scanResult.Inventory;
+            _inventory = inventory;
+            autoParkingFailures = await AutoParkDueShortcutsAsync(identities, nowUtc, cancellationToken)
+                .ConfigureAwait(false);
+            removedDuplicates = RemoveRecoveryDuplicates();
             List<DesktopScanIssue> issues = [.. scanResult.Issues];
             foreach (DesktopRootSnapshot scannedRoot in scanResult.Inventory.Roots)
             {
@@ -240,7 +257,7 @@ internal sealed class DesktopGuardController
         StateChanged?.Invoke();
         if (showNotifications && reconciliation is not null)
         {
-            ShowNewItemNotifications(reconciliation);
+            ShowNewItemNotifications(reconciliation, autoParkingFailures, removedDuplicates);
         }
     }
 
@@ -425,13 +442,16 @@ internal sealed class DesktopGuardController
     public async Task SetStartupPreferencesAsync(
         bool startAtSignIn,
         bool startMinimized,
+        int autoParkDelayMinutes,
         CancellationToken cancellationToken)
     {
         await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             DesktopGuardState updated = ShortcutStateTransitions.SetStartMinimized(
-                ShortcutStateTransitions.SetStartAtSignIn(_state, startAtSignIn),
+                ShortcutStateTransitions.SetStartAtSignIn(
+                    ShortcutStateTransitions.SetAutoParkDelayMinutes(_state, autoParkDelayMinutes),
+                    startAtSignIn),
                 startMinimized);
             _startAtSignInManager.SetEnabled(updated.StartAtSignIn, updated.StartMinimized);
             _stateStore.Save(updated);
@@ -528,6 +548,7 @@ internal sealed class DesktopGuardController
 
     public async Task ParkAsync(Guid shortcutId, CancellationToken cancellationToken)
     {
+        int removedDuplicates = 0;
         await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -542,7 +563,11 @@ internal sealed class DesktopGuardController
             {
                 TrackedShortcut pendingShortcut = FindShortcut(pending, shortcutId);
                 await _fileManager.ParkAsync(pendingShortcut, cancellationToken).ConfigureAwait(false);
-                DesktopGuardState completed = ShortcutStateTransitions.CompleteParking(_state, shortcutId);
+                byte[]? identityHash = TryReadRecoveryIdentityForParking(pendingShortcut)?.IdentityHash;
+                DesktopGuardState completed = ShortcutStateTransitions.CompleteParking(
+                    _state,
+                    shortcutId,
+                    identityHash);
                 _stateStore.Save(completed);
                 _state = completed;
                 _unresolvedOperationIds.TryRemove(shortcutId, out _);
@@ -555,6 +580,8 @@ internal sealed class DesktopGuardController
                     throw;
                 }
             }
+
+            removedDuplicates = RemoveRecoveryDuplicates();
         }
         catch (Exception exception)
         {
@@ -567,6 +594,10 @@ internal sealed class DesktopGuardController
         }
 
         StateChanged?.Invoke();
+        if (removedDuplicates > 0)
+        {
+            _notifications.ShowRecoveryDuplicatesRemoved(removedDuplicates);
+        }
     }
 
     public async Task RestoreAsync(Guid shortcutId, CancellationToken cancellationToken)
@@ -697,6 +728,17 @@ internal sealed class DesktopGuardController
             }
 
             TrackedShortcut pendingShortcut = FindShortcut(shortcutId);
+            if (pendingShortcut.Operation == ShortcutOperation.RemovingRecoveryDuplicate)
+            {
+                if (TryReconcileFailedOperation(shortcutId) == PendingOperationResolution.Ambiguous)
+                {
+                    throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AmbiguousRecovery);
+                }
+
+                // A later scan may retry only after reading and validating both copies again.
+                return;
+            }
+
             await _fileManager.RetryPendingOperationAsync(
                 pendingShortcut,
                 cancellationToken,
@@ -738,9 +780,8 @@ internal sealed class DesktopGuardController
         finally
         {
             _stateGate.Release();
+            StateChanged?.Invoke();
         }
-
-        StateChanged?.Invoke();
     }
 
     public void EnsureRecoveryDirectory()
@@ -758,7 +799,8 @@ internal sealed class DesktopGuardController
                 or ShortcutOperation.Creating
                 or ShortcutOperation.Renaming
                 or ShortcutOperation.DeletingToRecycleBin
-                or ShortcutOperation.DeletingPermanently).ToArray())
+                or ShortcutOperation.DeletingPermanently
+                or ShortcutOperation.RemovingRecoveryDuplicate).ToArray())
         {
             PendingOperationResolution resolution;
             try
@@ -787,10 +829,331 @@ internal sealed class DesktopGuardController
         _state = working;
     }
 
-    private void ShowNewItemNotifications(InventoryReconciliation reconciliation)
+    private int RemoveRecoveryDuplicates()
+    {
+        // Use saved identities only to select candidates. Removal requires fresh identities and locked byte checks.
+        RecoveryShortcutSnapshot[] saved = _state.Shortcuts
+            .Where(shortcut => shortcut.ShortcutIdentityHash is { Length: 32 })
+            .Select(shortcut => new RecoveryShortcutSnapshot(shortcut.Id, shortcut.ShortcutIdentityHash!, DateTimeOffset.MinValue))
+            .ToArray();
+        HashSet<Guid> candidateIds = RecoveryDuplicatePolicy.FindDuplicates(_state.Shortcuts, saved)
+            .SelectMany(pair => new[] { pair.DuplicateId, pair.KeeperId }).ToHashSet();
+        TrackedShortcut[] candidates = _state.Shortcuts
+            .Where(shortcut => candidateIds.Contains(shortcut.Id))
+            .ToArray();
+        int firstCandidateIndex = _nextRecoveryDuplicateCandidateId is Guid nextId
+            ? Array.FindIndex(candidates, shortcut => shortcut.Id == nextId)
+            : -1;
+        if (firstCandidateIndex < 0)
+        {
+            firstCandidateIndex = 0;
+        }
+
+        Dictionary<Guid, ShortcutIdentityReadResult> identities = [];
+        List<RecoveryShortcutSnapshot> snapshots = [];
+        int failures = 0;
+        int candidateCount = Math.Min(candidates.Length, (int)(MaximumIdentityBackfillBytes / (1024 * 1024)));
+        for (int offset = 0; offset < candidateCount; offset++)
+        {
+            TrackedShortcut shortcut = candidates[(firstCandidateIndex + offset) % candidates.Length];
+            ShortcutIdentityReadResult? identity;
+            try
+            {
+                identity = _fileManager.TryReadParkedIdentity(shortcut);
+            }
+            catch (Exception exception) when (IsExpectedIdentityReadException(exception))
+            {
+                identity = null;
+            }
+
+            if (identity is null || !identity.IdentityHash.AsSpan().SequenceEqual(shortcut.ShortcutIdentityHash))
+            {
+                failures++;
+                continue;
+            }
+
+            identities.Add(shortcut.Id, identity);
+            snapshots.Add(new RecoveryShortcutSnapshot(shortcut.Id, identity.IdentityHash, identity.LastWriteUtc));
+        }
+
+        _nextRecoveryDuplicateCandidateId = candidates.Length == 0
+            ? null
+            : candidates[(firstCandidateIndex + candidateCount) % candidates.Length].Id;
+
+        int removed = 0;
+        foreach ((Guid duplicateId, Guid keeperId) in RecoveryDuplicatePolicy.FindDuplicates(_state.Shortcuts, snapshots))
+        {
+            DesktopGuardState pending = ShortcutStateTransitions.BeginRecoveryDuplicateRemoval(_state, duplicateId, keeperId);
+            _stateStore.Save(pending);
+            _state = pending;
+            try
+            {
+                _fileManager.RemoveRecoveryDuplicate(FindShortcut(duplicateId), identities[duplicateId],
+                    FindShortcut(keeperId), identities[keeperId]);
+                DesktopGuardState completed = ShortcutStateTransitions.CompleteDelete(_state, duplicateId);
+                _stateStore.Save(completed);
+                _state = completed;
+                _unresolvedOperationIds.TryRemove(duplicateId, out _);
+                removed++;
+            }
+            catch (Exception exception) when (IsExpectedIdentityReadException(exception))
+            {
+                if (TryReconcileFailedOperation(duplicateId) == PendingOperationResolution.OperationMovedFile)
+                {
+                    removed++;
+                }
+                else
+                {
+                    failures++;
+                }
+            }
+        }
+
+        RecoveryDuplicateRemovalFailureCount = failures;
+        return removed;
+    }
+
+    private void BackfillParkedShortcutIdentities()
+    {
+        DesktopGuardState updated = _state;
+        long totalReadBytes = 0;
+        foreach (TrackedShortcut shortcut in _state.Shortcuts.Where(shortcut =>
+                     shortcut.Status == ShortcutStatus.Parked && shortcut.ShortcutIdentityHash is null))
+        {
+            if (MaximumIdentityBackfillBytes - totalReadBytes < 1024 * 1024)
+            {
+                break;
+            }
+
+            ShortcutIdentityReadResult? identity;
+            try
+            {
+                identity = _fileManager.TryReadParkedIdentity(shortcut);
+            }
+            catch (Exception exception) when (IsExpectedIdentityReadException(exception))
+            {
+                continue;
+            }
+
+            if (identity is null)
+            {
+                continue;
+            }
+
+            totalReadBytes += identity.SourceLength;
+            if (totalReadBytes > MaximumIdentityBackfillBytes)
+            {
+                break;
+            }
+
+            updated = ShortcutStateTransitions.SetShortcutIdentityHash(
+                updated,
+                shortcut.Id,
+                identity.IdentityHash);
+        }
+
+        if (!ReferenceEquals(updated, _state))
+        {
+            _stateStore.Save(updated);
+            _state = updated;
+        }
+    }
+
+    private (DesktopInventorySnapshot Inventory, Dictionary<string, ShortcutIdentityReadResult> Identities)
+        EnrichSnapshotWithShortcutIdentities(DesktopInventorySnapshot inventory)
+    {
+        StringComparer pathComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        Dictionary<string, ShortcutIdentityReadResult> identities = new(pathComparer);
+        List<DesktopRootSnapshot> enrichedRoots = [];
+        long totalReadBytes = 0;
+
+        foreach (DesktopRootSnapshot root in inventory.Roots)
+        {
+            DesktopRootCheckpoint? checkpoint = _state.Roots.FirstOrDefault(item => item.RootKind == root.RootKind);
+            bool sameRoot = checkpoint is { IsBaselined: true }
+                && PathsEqual(checkpoint.RootPath, root.RootPath);
+            bool hasParkedRules = sameRoot && _state.Shortcuts.Any(shortcut =>
+                shortcut.Status == ShortcutStatus.Parked
+                    && shortcut.RootKind == root.RootKind
+                    && PathsEqual(shortcut.RootPath, root.RootPath)
+                    && shortcut.ShortcutIdentityHash is { Length: 32 });
+            if (!root.IsComplete || !hasParkedRules)
+            {
+                enrichedRoots.Add(root);
+                continue;
+            }
+
+            HashSet<string> knownPaths = checkpoint!.KnownPaths.ToHashSet(pathComparer);
+            HashSet<string> scheduledPaths = _state.Shortcuts
+                .Where(shortcut => (shortcut.Status == ShortcutStatus.ScheduledForAutoParking
+                        || shortcut.Status == ShortcutStatus.Pending && !shortcut.AutoParkingEvaluated)
+                    && shortcut.RootKind == root.RootKind
+                    && PathsEqual(shortcut.RootPath, root.RootPath))
+                .Select(shortcut => shortcut.OriginalPath)
+                .ToHashSet(pathComparer);
+            List<DesktopInventoryEntry> entries = [];
+            foreach (DesktopInventoryEntry entry in root.Entries)
+            {
+                if (entry.Kind != DesktopEntryKind.Shortcut
+                    || knownPaths.Contains(entry.Path) && !scheduledPaths.Contains(entry.Path)
+                    || MaximumIdentityReadBytesPerScan - totalReadBytes < 1024 * 1024)
+                {
+                    entries.Add(entry);
+                    continue;
+                }
+
+                ShortcutIdentityReadResult? identity;
+                try
+                {
+                    identity = _fileManager.TryReadDesktopIdentity(entry);
+                }
+                catch (Exception exception) when (IsExpectedIdentityReadException(exception))
+                {
+                    identity = null;
+                }
+
+                if (identity is null)
+                {
+                    entries.Add(entry);
+                    continue;
+                }
+
+                totalReadBytes += identity.SourceLength;
+                identities[entry.Path] = identity;
+                entries.Add(entry with { ShortcutIdentityHash = identity.IdentityHash, SourceContentHash = identity.SourceContentHash });
+            }
+
+            enrichedRoots.Add(root with { Entries = entries });
+        }
+
+        return (new DesktopInventorySnapshot(enrichedRoots), identities);
+    }
+
+    private async Task<List<TrackedShortcut>> AutoParkDueShortcutsAsync(
+        IReadOnlyDictionary<string, ShortcutIdentityReadResult> identities,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        List<TrackedShortcut> failedShortcuts = [];
+        DateTimeOffset dueBefore = nowUtc - TimeSpan.FromMinutes(_state.AutoParkDelayMinutes);
+        foreach (TrackedShortcut scheduled in _state.Shortcuts
+                     .Where(shortcut => shortcut.Status == ShortcutStatus.ScheduledForAutoParking
+                         && shortcut.AutoParkingSinceUtc is DateTimeOffset sinceUtc
+                         && sinceUtc <= dueBefore)
+                     .ToArray())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (scheduled.AutoParkingSinceUtc is not DateTimeOffset sinceUtc
+                || !identities.TryGetValue(scheduled.OriginalPath, out ShortcutIdentityReadResult? identity)
+                || scheduled.ShortcutIdentityHash is not { Length: 32 } expectedIdentity
+                || !expectedIdentity.AsSpan().SequenceEqual(identity.IdentityHash)
+                || !HasMatchingParkedRule(_state, scheduled))
+            {
+                continue;
+            }
+
+            DesktopRootSnapshot? root = _inventory.Roots.FirstOrDefault(item =>
+                item.RootKind == scheduled.RootKind
+                    && item.IsComplete
+                    && PathsEqual(item.RootPath, scheduled.RootPath));
+            if (root is null || !root.Entries.Any(entry => PathsEqual(entry.Path, scheduled.OriginalPath)))
+            {
+                continue;
+            }
+
+            DesktopGuardState pending = ShortcutStateTransitions.BeginAutomaticParking(
+                _state,
+                scheduled.Id,
+                Guid.NewGuid());
+            _stateStore.Save(pending);
+            _state = pending;
+
+            try
+            {
+                TrackedShortcut pendingShortcut = FindShortcut(pending, scheduled.Id);
+                await _fileManager.ParkAutomaticallyAsync(
+                    pendingShortcut,
+                    identity.SourceContentHash,
+                    cancellationToken).ConfigureAwait(false);
+                byte[]? recoveryIdentityHash = TryReadRecoveryIdentityForParking(pendingShortcut)?.IdentityHash;
+                DesktopGuardState completed = ShortcutStateTransitions.CompleteParking(
+                    _state,
+                    scheduled.Id,
+                    recoveryIdentityHash);
+                _stateStore.Save(completed);
+                _state = completed;
+                _unresolvedOperationIds.TryRemove(scheduled.Id, out _);
+            }
+            catch (Exception exception)
+            {
+                PendingOperationResolution resolution = TryReconcileFailedOperation(scheduled.Id);
+                if (resolution == PendingOperationResolution.OperationDidNotMoveFile)
+                {
+                    TrackedShortcut pendingShortcut = FindShortcut(scheduled.Id);
+                    if (pendingShortcut.Status == ShortcutStatus.Pending
+                        && pendingShortcut.Operation == ShortcutOperation.None)
+                    {
+                        failedShortcuts.Add(pendingShortcut);
+                    }
+                }
+
+                if (exception is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+            }
+        }
+
+        return failedShortcuts;
+    }
+
+    private ShortcutIdentityReadResult? TryReadRecoveryIdentityForParking(TrackedShortcut shortcut)
+    {
+        try
+        {
+            return _fileManager.TryReadRecoveryIdentityForParking(shortcut);
+        }
+        catch (Exception exception) when (IsExpectedIdentityReadException(exception))
+        {
+            return null;
+        }
+    }
+
+    private static bool HasMatchingParkedRule(DesktopGuardState state, TrackedShortcut scheduled)
+    {
+        return state.Shortcuts.Any(rule => rule.Status == ShortcutStatus.Parked
+            && rule.Operation == ShortcutOperation.None
+            && rule.RootKind == scheduled.RootKind
+            && PathsEqual(rule.RootPath, scheduled.RootPath)
+            && rule.ShortcutIdentityHash is { Length: 32 } ruleHash
+            && scheduled.ShortcutIdentityHash is { Length: 32 } scheduledHash
+            && ruleHash.AsSpan().SequenceEqual(scheduledHash));
+    }
+
+    private static bool IsExpectedIdentityReadException(Exception exception)
+    {
+        return exception is ShortcutFileOperationException
+            or StateStoreException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException
+            or System.Runtime.InteropServices.COMException;
+    }
+
+    private void ShowNewItemNotifications(
+        InventoryReconciliation reconciliation,
+        IReadOnlyList<TrackedShortcut> autoParkingFailures,
+        int removedDuplicates)
     {
         // Windows may suppress notifications. The pending list and Public Desktop list remain authoritative.
         int shown = 0;
+        if (removedDuplicates > 0)
+        {
+            _notifications.ShowRecoveryDuplicatesRemoved(removedDuplicates);
+            shown++;
+        }
         foreach (TrackedShortcut shortcut in reconciliation.NewUserShortcuts)
         {
             if (shown++ >= MaximumNotificationsPerScan)
@@ -809,6 +1172,19 @@ internal sealed class DesktopGuardController
             }
 
             _notifications.ShowNewShortcut(shortcut, shortcut.Name, isPublic: true);
+        }
+
+        foreach (TrackedShortcut shortcut in autoParkingFailures)
+        {
+            if (shown++ >= MaximumNotificationsPerScan)
+            {
+                return;
+            }
+
+            _notifications.ShowNewShortcut(
+                shortcut,
+                shortcut.Name,
+                isPublic: shortcut.RootKind == DesktopRootKind.Public);
         }
     }
 
@@ -867,10 +1243,10 @@ internal sealed class DesktopGuardController
                 ShortcutStateTransitions.CancelRename(state, shortcutId),
             ShortcutOperation.Renaming when resolution == PendingOperationResolution.OperationMovedFile =>
                 ShortcutStateTransitions.CompleteRename(state, shortcutId),
-            ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently
+            ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently or ShortcutOperation.RemovingRecoveryDuplicate
                 when resolution == PendingOperationResolution.OperationDidNotMoveFile =>
                 ShortcutStateTransitions.CancelDelete(state, shortcutId),
-            ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently
+            ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently or ShortcutOperation.RemovingRecoveryDuplicate
                 when resolution == PendingOperationResolution.OperationMovedFile =>
                 ShortcutStateTransitions.CompleteDelete(state, shortcutId),
             _ => null,

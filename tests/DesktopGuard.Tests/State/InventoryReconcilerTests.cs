@@ -307,6 +307,212 @@ public sealed class InventoryReconcilerTests
     }
 
     [TestMethod]
+    public void Reconcile_RecreatedShortcutWithMatchingIdentityIsScheduledForAutoParking()
+    {
+        string userRoot = CreateRootPath("recreated-shortcut-identity");
+        byte[] identityHash = System.Security.Cryptography.SHA256.HashData("creality-launch"u8);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Creality Print 7.3.lnk"))]),
+            now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, original.Id, Guid.NewGuid()),
+            original.Id,
+            identityHash);
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Creality Print.lnk", identityHash: identityHash))]),
+            now.AddMinutes(1));
+
+        TrackedShortcut replacement = result.State.Shortcuts.Single(shortcut => shortcut.Id != original.Id);
+        Assert.AreEqual(ShortcutStatus.ScheduledForAutoParking, replacement.Status);
+        Assert.AreEqual(now.AddMinutes(1), replacement.AutoParkingSinceUtc);
+        Assert.AreEqual("Creality Print.lnk", replacement.Name);
+        Assert.IsEmpty(result.NewUserShortcuts);
+        Assert.IsTrue(DesktopStateValidator.IsValid(result.State));
+    }
+
+    [TestMethod]
+    public void Reconcile_ChangedBytesWithSameIdentityReturnToReview()
+    {
+        string root = CreateRootPath("changed-scheduled-shortcut");
+        byte[] identity = System.Security.Cryptography.SHA256.HashData("identity"u8);
+        byte[] changedBytes = System.Security.Cryptography.SHA256.HashData("changed bytes"u8);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                Entry(DesktopRootKind.User, root, "Original.lnk"))]), now).State;
+        Guid originalId = baseline.Shortcuts.Single().Id;
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, originalId, Guid.NewGuid()), originalId, identity);
+        DesktopInventoryEntry replacement = Entry(DesktopRootKind.User, root, "Copy.lnk", identityHash: identity);
+        DesktopGuardState scheduled = _reconciler.Reconcile(parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true, replacement)]), now).State;
+        InventoryReconciliation result = _reconciler.Reconcile(scheduled,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                replacement with { SourceContentHash = changedBytes })]), now.AddMinutes(5));
+        TrackedShortcut copy = result.State.Shortcuts.Single(item => item.Id != originalId);
+        Assert.AreEqual(ShortcutStatus.Pending, copy.Status);
+        Assert.IsNull(copy.ShortcutIdentityHash);
+        Assert.HasCount(1, result.NewUserShortcuts);
+
+        DesktopGuardState pending = ShortcutStateTransitions.BeginParking(result.State, copy.Id, Guid.NewGuid());
+        TrackedShortcut parkedCopy = ShortcutStateTransitions.CompleteParking(pending, copy.Id).Shortcuts
+            .Single(item => item.Id == copy.Id);
+        Assert.IsNull(parkedCopy.ShortcutIdentityHash);
+    }
+
+    [TestMethod]
+    public void RenameParkedRule_WithScheduledCopyProducesValidState()
+    {
+        string root = CreateRootPath("rename-parked-rule");
+        byte[] identity = System.Security.Cryptography.SHA256.HashData("identity"u8);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                Entry(DesktopRootKind.User, root, "Original.lnk"))]), now).State;
+        Guid originalId = baseline.Shortcuts.Single().Id;
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, originalId, Guid.NewGuid()), originalId, identity);
+        DesktopGuardState scheduled = _reconciler.Reconcile(parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                Entry(DesktopRootKind.User, root, "Copy.lnk", identityHash: identity))]), now).State;
+        DesktopGuardState renaming = ShortcutStateTransitions.BeginRename(scheduled, originalId, "Renamed.lnk");
+        Assert.IsTrue(DesktopStateValidator.IsValid(renaming));
+        Assert.IsTrue(DesktopStateValidator.IsValid(ShortcutStateTransitions.CompleteRename(renaming, originalId)));
+    }
+
+    [TestMethod]
+    [DataRow(ShortcutStatus.Pending, ShortcutStatus.ScheduledForAutoParking)]
+    [DataRow(ShortcutStatus.ApprovedVisible, ShortcutStatus.ApprovedVisible)]
+    public void Reconcile_ExistingPendingMatchIsScheduledOnceWhileApprovedDecisionIsPreserved(
+        ShortcutStatus initialStatus, ShortcutStatus expectedStatus)
+    {
+        string root = CreateRootPath("existing-pending-rule");
+        byte[] identity = System.Security.Cryptography.SHA256.HashData("identity"u8);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                Entry(DesktopRootKind.User, root, "Original.lnk"), Entry(DesktopRootKind.User, root, "Copy.lnk"))]), now).State;
+        Guid originalId = baseline.Shortcuts.Single(shortcut => shortcut.Name == "Original.lnk").Id;
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, originalId, Guid.NewGuid()), originalId, identity);
+        parked = parked with
+        {
+            Shortcuts = parked.Shortcuts.Select(shortcut => shortcut.Id == originalId ? shortcut
+                : shortcut with { Status = initialStatus, AutoParkingEvaluated = false }).ToList(),
+        };
+        DesktopInventoryEntry copy = Entry(DesktopRootKind.User, root, "Copy.lnk", identityHash: identity);
+        InventoryReconciliation result = _reconciler.Reconcile(parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true, copy)]), now);
+        Assert.AreEqual(expectedStatus, result.State.Shortcuts.Single(shortcut => shortcut.Id != originalId).Status);
+        Assert.IsEmpty(result.NewUserShortcuts);
+
+        if (initialStatus == ShortcutStatus.Pending)
+        {
+            DesktopGuardState changed = _reconciler.Reconcile(result.State,
+                new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                    copy with { SourceContentHash = new byte[32] })]), now.AddMinutes(1)).State;
+            DesktopGuardState rescanned = _reconciler.Reconcile(changed,
+                new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true, copy)]), now.AddMinutes(2)).State;
+            Assert.AreEqual(ShortcutStatus.Pending, rescanned.Shortcuts.Single(shortcut => shortcut.Id != originalId).Status);
+        }
+    }
+
+    [TestMethod]
+    public void Reconcile_ExistingPendingShortcutDefersUntilParkedIdentityCanBeCompared()
+    {
+        string root = CreateRootPath("pending-identity-deferred");
+        byte[] identity = System.Security.Cryptography.SHA256.HashData("identity"u8);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                Entry(DesktopRootKind.User, root, "Original.lnk"), Entry(DesktopRootKind.User, root, "Copy.lnk"))]), now).State;
+        Guid originalId = baseline.Shortcuts.Single(shortcut => shortcut.Name == "Original.lnk").Id;
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, originalId, Guid.NewGuid()), originalId, identity);
+        parked = parked with
+        {
+            Shortcuts = parked.Shortcuts.Select(shortcut => shortcut.Id == originalId ? shortcut
+                : shortcut with { Status = ShortcutStatus.Pending, AutoParkingEvaluated = false }).ToList(),
+        };
+
+        DesktopInventoryEntry copyWithoutIdentity = Entry(DesktopRootKind.User, root, "Copy.lnk");
+        InventoryReconciliation deferred = _reconciler.Reconcile(parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true, copyWithoutIdentity)]), now);
+        TrackedShortcut stillPending = deferred.State.Shortcuts.Single(shortcut => shortcut.Id != originalId);
+        Assert.AreEqual(ShortcutStatus.Pending, stillPending.Status);
+        Assert.IsFalse(stillPending.AutoParkingEvaluated);
+
+        InventoryReconciliation compared = _reconciler.Reconcile(deferred.State,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                copyWithoutIdentity with { ShortcutIdentityHash = identity, SourceContentHash = identity })]),
+            now.AddMinutes(1));
+        TrackedShortcut scheduled = compared.State.Shortcuts.Single(shortcut => shortcut.Id != originalId);
+        Assert.AreEqual(ShortcutStatus.ScheduledForAutoParking, scheduled.Status);
+        Assert.IsTrue(scheduled.AutoParkingEvaluated);
+    }
+
+    [TestMethod]
+    public void Reconcile_ExistingPendingShortcutWithoutParkedRuleCompletesComparisonWithoutIdentity()
+    {
+        string root = CreateRootPath("pending-without-rule");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                Entry(DesktopRootKind.User, root, "Existing.lnk"))]), now).State;
+        TrackedShortcut pending = baseline.Shortcuts.Single() with
+        {
+            Status = ShortcutStatus.Pending,
+            AutoParkingEvaluated = false,
+        };
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            baseline with { Shortcuts = [pending] },
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, root, true,
+                Entry(DesktopRootKind.User, root, "Existing.lnk"))]),
+            now.AddMinutes(1));
+
+        Assert.IsTrue(result.State.Shortcuts.Single().AutoParkingEvaluated);
+        Assert.AreEqual(ShortcutStatus.Pending, result.State.Shortcuts.Single().Status);
+    }
+
+    [TestMethod]
+    public void Reconcile_SameNameWithDifferentIdentityRemainsPending()
+    {
+        string userRoot = CreateRootPath("same-name-different-identity");
+        byte[] parkedIdentity = System.Security.Cryptography.SHA256.HashData("old-target"u8);
+        byte[] newIdentity = System.Security.Cryptography.SHA256.HashData("new-target"u8);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Creality Print.lnk"))]),
+            now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, original.Id, Guid.NewGuid()),
+            original.Id,
+            parkedIdentity);
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Creality Print.lnk", identityHash: newIdentity))]),
+            now.AddMinutes(1));
+
+        TrackedShortcut replacement = result.State.Shortcuts.Single(shortcut => shortcut.Id != original.Id);
+        Assert.AreEqual(ShortcutStatus.Pending, replacement.Status);
+        Assert.IsNull(replacement.ShortcutIdentityHash);
+        Assert.HasCount(1, result.NewUserShortcuts);
+    }
+
+    [TestMethod]
     public void Reconcile_IncompleteRootDoesNotChangeItsBaselineOrDecisions()
     {
         string userRoot = CreateRootPath("user");
@@ -472,7 +678,8 @@ public sealed class InventoryReconcilerTests
         DesktopRootKind kind,
         string rootPath,
         string name,
-        bool isHidden = false)
+        bool isHidden = false,
+        byte[]? identityHash = null)
     {
         return new DesktopInventoryEntry(
             kind,
@@ -480,7 +687,9 @@ public sealed class InventoryReconcilerTests
             Path.Combine(rootPath, name),
             name,
             DesktopEntryClassifier.Classify(name),
-            IsHidden: isHidden);
+            IsHidden: isHidden,
+            ShortcutIdentityHash: identityHash,
+            SourceContentHash: identityHash);
     }
 
     private static DesktopEvent Event(string rootPath, string name, DateTimeOffset timestamp)

@@ -300,6 +300,113 @@ public sealed class DesktopGuardStateStoreTests
     }
 
     [TestMethod]
+    public void Load_VersionSixAddsDefaultAutoParkingDelayWithoutChangingDecisions()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string parkedPath = Path.Combine(desktop, "Creality Print.lnk");
+        Guid recoveryFolderId = Guid.NewGuid();
+        DesktopGuardState versionSix = new()
+        {
+            SchemaVersion = 6,
+            StartAtSignIn = false,
+            StartMinimized = false,
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [])],
+            Shortcuts =
+            [
+                new TrackedShortcut(
+                    Guid.NewGuid(),
+                    DesktopRootKind.User,
+                    desktop,
+                    "Creality Print.lnk",
+                    parkedPath,
+                    ShortcutStatus.Parked,
+                    StatusBeforeParking: ShortcutStatus.Pending,
+                    Operation: ShortcutOperation.None,
+                    RecoveryFolderId: recoveryFolderId),
+            ],
+        };
+        JsonObject legacyDocument = JsonSerializer.SerializeToNode(versionSix)!.AsObject();
+        legacyDocument.Remove(nameof(DesktopGuardState.AutoParkDelayMinutes));
+        foreach (JsonObject shortcut in legacyDocument["Shortcuts"]!.AsArray().Select(token => token!.AsObject()))
+        {
+            shortcut.Remove(nameof(TrackedShortcut.ShortcutIdentityHash));
+            shortcut.Remove(nameof(TrackedShortcut.AutoParkingSinceUtc));
+        }
+
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), legacyDocument.ToJsonString());
+        DesktopGuardStateStore store = new(temporaryDirectory.Path);
+
+        DesktopGuardState migrated = store.Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.AreEqual(5, migrated.AutoParkDelayMinutes);
+        Assert.IsFalse(migrated.StartAtSignIn);
+        Assert.IsFalse(migrated.StartMinimized);
+        Assert.AreEqual(ShortcutStatus.Parked, migrated.Shortcuts.Single().Status);
+        Assert.AreEqual(recoveryFolderId, migrated.Shortcuts.Single().RecoveryFolderId);
+        Assert.IsTrue(DesktopStateValidator.IsValid(migrated));
+    }
+
+    [TestMethod]
+    public void Load_VersionSixPreservesDesktopGuardLauncherMarker()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string launcherPath = Path.Combine(desktop, "Desktop Guard.lnk");
+        Guid launcherId = Guid.NewGuid();
+        DesktopGuardState versionSix = new()
+        {
+            SchemaVersion = 6,
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [launcherPath])],
+            Shortcuts =
+            [
+                new TrackedShortcut(launcherId, DesktopRootKind.User, desktop, "Desktop Guard.lnk",
+                    launcherPath, ShortcutStatus.ApprovedVisible, null, ShortcutOperation.None, null,
+                    IsDesktopGuardShortcut: true),
+            ],
+        };
+        JsonObject document = JsonSerializer.SerializeToNode(versionSix)!.AsObject();
+        document.Remove(nameof(DesktopGuardState.AutoParkDelayMinutes));
+        JsonObject launcher = document["Shortcuts"]!.AsArray().Single()!.AsObject();
+        launcher.Remove(nameof(TrackedShortcut.ShortcutIdentityHash));
+        launcher.Remove(nameof(TrackedShortcut.AutoParkingSinceUtc));
+        launcher.Remove(nameof(TrackedShortcut.AutoParkingContentHash));
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), document.ToJsonString());
+
+        DesktopGuardState migrated = new DesktopGuardStateStore(temporaryDirectory.Path).Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.AreEqual(launcherId, migrated.Shortcuts.Single().Id);
+        Assert.IsTrue(migrated.Shortcuts.Single().IsDesktopGuardShortcut);
+        Assert.IsTrue(DesktopStateValidator.IsValid(migrated));
+    }
+
+    [TestMethod]
+    public void Load_VersionSevenPreservesFingerprintsAndAllowsExistingPendingComparison()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string path = Path.Combine(desktop, "App.lnk");
+        TrackedShortcut pending = new(Guid.NewGuid(), DesktopRootKind.User, desktop, "App.lnk", path,
+            ShortcutStatus.Pending, null, ShortcutOperation.None, null);
+        DesktopGuardState legacy = new()
+        {
+            SchemaVersion = 7,
+            Roots = [new(DesktopRootKind.User, desktop, true, [path])],
+            Shortcuts = [pending],
+        };
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), JsonSerializer.Serialize(legacy));
+
+        DesktopGuardState migrated = new DesktopGuardStateStore(temporaryDirectory.Path).Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.IsFalse(migrated.Shortcuts.Single().AutoParkingEvaluated);
+        Assert.AreEqual(ShortcutStatus.Pending, migrated.Shortcuts.Single().Status);
+        Assert.IsTrue(DesktopStateValidator.IsValid(migrated));
+    }
+
+    [TestMethod]
     public void Load_WhenStateIsCorrupt_PreservesTheFileAndFailsClosed()
     {
         using TemporaryDirectory temporaryDirectory = new();

@@ -133,6 +133,7 @@ public static class ShortcutStateTransitions
         ArgumentNullException.ThrowIfNull(state);
         TrackedShortcut shortcut = Find(state, shortcutId);
         if (shortcut.Operation != ShortcutOperation.None
+            || shortcut.Status == ShortcutStatus.ScheduledForAutoParking
             || !IsValidName(targetName)
             || !string.Equals(Path.GetExtension(shortcut.Name), Path.GetExtension(targetName), StringComparison.OrdinalIgnoreCase)
             || string.Equals(shortcut.Name, targetName, StringComparison.Ordinal))
@@ -209,16 +210,38 @@ public static class ShortcutStateTransitions
     public static DesktopGuardState BeginDelete(DesktopGuardState state, Guid shortcutId)
     {
         TrackedShortcut shortcut = Find(state, shortcutId);
-        if (shortcut.Operation != ShortcutOperation.None)
+        if (shortcut.Operation != ShortcutOperation.None
+            || shortcut.Status == ShortcutStatus.ScheduledForAutoParking)
         {
             throw new InvalidOperationException("This shortcut cannot be deleted in its current state.");
         }
 
-        return Replace(state, shortcut with
+        return CancelOrphanedAutoParkingSchedules(Replace(state, shortcut with
         {
             Operation = shortcut.Status == ShortcutStatus.Parked
                 ? ShortcutOperation.DeletingPermanently
                 : ShortcutOperation.DeletingToRecycleBin,
+            OperationId = Guid.NewGuid(),
+        }));
+    }
+
+    public static DesktopGuardState BeginRecoveryDuplicateRemoval(DesktopGuardState state, Guid duplicateId, Guid keeperId)
+    {
+        TrackedShortcut duplicate = Find(state, duplicateId);
+        TrackedShortcut keeper = Find(state, keeperId);
+        if (duplicateId == keeperId
+            || duplicate.Status != ShortcutStatus.Parked
+            || duplicate.Operation != ShortcutOperation.None
+            || duplicate.ShortcutIdentityHash is not { Length: 32 } hash
+            || !IsMatchingParkedRule(keeper, duplicate, hash)
+            || duplicate.IsDesktopGuardShortcut != keeper.IsDesktopGuardShortcut)
+        {
+            throw new InvalidOperationException("The shortcut is not a removable Recovery duplicate.");
+        }
+
+        return Replace(state, duplicate with
+        {
+            Operation = ShortcutOperation.RemovingRecoveryDuplicate,
             OperationId = Guid.NewGuid(),
         });
     }
@@ -226,7 +249,7 @@ public static class ShortcutStateTransitions
     public static DesktopGuardState CompleteDelete(DesktopGuardState state, Guid shortcutId)
     {
         TrackedShortcut shortcut = Find(state, shortcutId);
-        if (shortcut.Operation is not (ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently))
+        if (shortcut.Operation is not (ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently or ShortcutOperation.RemovingRecoveryDuplicate))
         {
             throw new InvalidOperationException("No delete operation is in progress for this shortcut.");
         }
@@ -241,17 +264,17 @@ public static class ShortcutStateTransitions
                 .ToList();
         }
 
-        return state with
+        return CancelOrphanedAutoParkingSchedules(state with
         {
             Roots = roots,
             Shortcuts = state.Shortcuts.Where(item => item.Id != shortcutId).ToList(),
-        };
+        });
     }
 
     public static DesktopGuardState CancelDelete(DesktopGuardState state, Guid shortcutId)
     {
         TrackedShortcut shortcut = Find(state, shortcutId);
-        if (shortcut.Operation is not (ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently))
+        if (shortcut.Operation is not (ShortcutOperation.DeletingToRecycleBin or ShortcutOperation.DeletingPermanently or ShortcutOperation.RemovingRecoveryDuplicate))
         {
             throw new InvalidOperationException("No delete operation is in progress for this shortcut.");
         }
@@ -266,7 +289,8 @@ public static class ShortcutStateTransitions
     public static DesktopGuardState SetHidden(DesktopGuardState state, Guid shortcutId, bool isHidden)
     {
         TrackedShortcut shortcut = Find(state, shortcutId);
-        if (shortcut.Operation != ShortcutOperation.None)
+        if (shortcut.Operation != ShortcutOperation.None
+            || shortcut.Status == ShortcutStatus.ScheduledForAutoParking)
         {
             throw new InvalidOperationException("This shortcut cannot be updated in its current state.");
         }
@@ -289,10 +313,92 @@ public static class ShortcutStateTransitions
             Operation = ShortcutOperation.Parking,
             RecoveryFolderId = recoveryFolderId,
             OperationId = recoveryFolderId,
+            AutoParkingSinceUtc = null,
+            ShortcutIdentityHash = null,
         });
     }
 
-    public static DesktopGuardState CompleteParking(DesktopGuardState state, Guid shortcutId)
+    public static DesktopGuardState ScheduleAutoParking(
+        DesktopGuardState state,
+        Guid shortcutId,
+        byte[] shortcutIdentityHash,
+        byte[] sourceContentHash,
+        DateTimeOffset firstObservedUtc)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(shortcutIdentityHash);
+        ArgumentNullException.ThrowIfNull(sourceContentHash);
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        firstObservedUtc = firstObservedUtc.ToUniversalTime();
+        if (shortcut.Status is not (ShortcutStatus.Pending or ShortcutStatus.ApprovedVisible)
+            || shortcut.Operation != ShortcutOperation.None
+            || shortcutIdentityHash.Length != 32
+            || sourceContentHash.Length != 32
+            || !state.Shortcuts.Any(rule => IsMatchingParkedRule(rule, shortcut, shortcutIdentityHash)))
+        {
+            throw new InvalidOperationException("This shortcut cannot be scheduled for automatic parking.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            Status = ShortcutStatus.ScheduledForAutoParking,
+            ShortcutIdentityHash = [.. shortcutIdentityHash],
+            AutoParkingSinceUtc = firstObservedUtc,
+            AutoParkingContentHash = [.. sourceContentHash],
+            AutoParkingEvaluated = true,
+        });
+    }
+
+    public static DesktopGuardState CancelAutoParking(DesktopGuardState state, Guid shortcutId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Status != ShortcutStatus.ScheduledForAutoParking
+            || shortcut.Operation != ShortcutOperation.None)
+        {
+            throw new InvalidOperationException("This shortcut is not awaiting automatic parking.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            Status = ShortcutStatus.Pending,
+            AutoParkingSinceUtc = null,
+            AutoParkingContentHash = null,
+            ShortcutIdentityHash = null,
+            AutoParkingEvaluated = true,
+        });
+    }
+
+    public static DesktopGuardState BeginAutomaticParking(
+        DesktopGuardState state,
+        Guid shortcutId,
+        Guid recoveryFolderId)
+    {
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Status != ShortcutStatus.ScheduledForAutoParking
+            || shortcut.Operation != ShortcutOperation.None
+            || shortcut.ShortcutIdentityHash is not { Length: 32 }
+            || shortcut.AutoParkingContentHash is not { Length: 32 }
+            || recoveryFolderId == Guid.Empty)
+        {
+            throw new InvalidOperationException("This shortcut cannot be automatically parked in its current state.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            Status = ShortcutStatus.Pending,
+            AutoParkingSinceUtc = null,
+            AutoParkingContentHash = null,
+            Operation = ShortcutOperation.Parking,
+            AutoParkingEvaluated = true,
+            RecoveryFolderId = recoveryFolderId,
+            OperationId = recoveryFolderId,
+        });
+    }
+
+    public static DesktopGuardState CompleteParking(
+        DesktopGuardState state,
+        Guid shortcutId,
+        byte[]? shortcutIdentityHash = null)
     {
         TrackedShortcut shortcut = Find(state, shortcutId);
         if (shortcut.Operation != ShortcutOperation.Parking
@@ -314,6 +420,10 @@ public static class ShortcutStateTransitions
             StatusBeforeParking = shortcut.Status,
             Operation = ShortcutOperation.None,
             OperationId = null,
+            ShortcutIdentityHash = shortcutIdentityHash is { Length: 32 }
+                ? [.. shortcutIdentityHash]
+                : shortcut.ShortcutIdentityHash,
+            AutoParkingSinceUtc = null,
         });
     }
 
@@ -330,6 +440,41 @@ public static class ShortcutStateTransitions
             Operation = ShortcutOperation.None,
             RecoveryFolderId = null,
             OperationId = null,
+            AutoParkingSinceUtc = null,
+        });
+    }
+
+    public static DesktopGuardState SetAutoParkDelayMinutes(DesktopGuardState state, int minutes)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (minutes is < 2 or > 30)
+        {
+            throw new ArgumentOutOfRangeException(nameof(minutes));
+        }
+
+        return state with { AutoParkDelayMinutes = minutes };
+    }
+
+    public static DesktopGuardState SetShortcutIdentityHash(
+        DesktopGuardState state,
+        Guid shortcutId,
+        byte[]? shortcutIdentityHash)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (shortcutIdentityHash is not null && shortcutIdentityHash.Length != 32)
+        {
+            throw new ArgumentException("A shortcut identity hash must be 32 bytes.", nameof(shortcutIdentityHash));
+        }
+
+        TrackedShortcut shortcut = Find(state, shortcutId);
+        if (shortcut.Operation != ShortcutOperation.None || shortcut.Status != ShortcutStatus.Parked)
+        {
+            throw new InvalidOperationException("Only a parked shortcut can store a shortcut identity.");
+        }
+
+        return Replace(state, shortcut with
+        {
+            ShortcutIdentityHash = shortcutIdentityHash is null ? null : [.. shortcutIdentityHash],
         });
     }
 
@@ -344,11 +489,11 @@ public static class ShortcutStateTransitions
             throw new InvalidOperationException("Only a parked shortcut can be restored.");
         }
 
-        return Replace(state, shortcut with
+        return CancelOrphanedAutoParkingSchedules(Replace(state, shortcut with
         {
             Operation = ShortcutOperation.Restoring,
             OperationId = Guid.NewGuid(),
-        });
+        }));
     }
 
     public static DesktopGuardState BeginMove(
@@ -458,7 +603,7 @@ public static class ShortcutStateTransitions
             shortcut.RootPath,
             shortcut.OriginalPath,
             isKnown: true);
-        return Replace(state with { Roots = roots }, shortcut with
+        return CancelOrphanedAutoParkingSchedules(Replace(state with { Roots = roots }, shortcut with
         {
             Status = shortcut.StatusBeforeParking.Value,
             StatusBeforeParking = null,
@@ -466,7 +611,7 @@ public static class ShortcutStateTransitions
             RecoveryFolderId = null,
             OperationId = null,
             IsHidden = false,
-        });
+        }));
     }
 
     public static DesktopGuardState CancelRestore(DesktopGuardState state, Guid shortcutId)
@@ -494,6 +639,43 @@ public static class ShortcutStateTransitions
     {
         ArgumentNullException.ThrowIfNull(state);
         return state with { StartMinimized = enabled };
+    }
+
+    private static DesktopGuardState CancelOrphanedAutoParkingSchedules(DesktopGuardState state)
+    {
+        List<TrackedShortcut> shortcuts = [.. state.Shortcuts];
+        for (int index = 0; index < shortcuts.Count; index++)
+        {
+            TrackedShortcut shortcut = shortcuts[index];
+            if (shortcut.Status == ShortcutStatus.ScheduledForAutoParking
+                && !state.Shortcuts.Any(rule => IsMatchingParkedRule(rule, shortcut, shortcut.ShortcutIdentityHash)))
+            {
+                shortcuts[index] = shortcut with
+                {
+                    Status = ShortcutStatus.Pending,
+                    AutoParkingSinceUtc = null,
+                    AutoParkingContentHash = null,
+                    ShortcutIdentityHash = null,
+                    AutoParkingEvaluated = true,
+                };
+            }
+        }
+
+        return state with { Shortcuts = shortcuts };
+    }
+
+    private static bool IsMatchingParkedRule(
+        TrackedShortcut rule,
+        TrackedShortcut shortcut,
+        byte[]? identityHash)
+    {
+        return identityHash is { Length: 32 }
+            && rule.Status == ShortcutStatus.Parked
+            && rule.Operation == ShortcutOperation.None
+            && rule.RootKind == shortcut.RootKind
+            && PathsEqual(rule.RootPath, shortcut.RootPath)
+            && rule.ShortcutIdentityHash is { Length: 32 } ruleHash
+            && ruleHash.AsSpan().SequenceEqual(identityHash);
     }
 
     private static TrackedShortcut Find(DesktopGuardState state, Guid shortcutId)

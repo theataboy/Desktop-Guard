@@ -236,6 +236,7 @@ internal sealed class DesktopGuardApplicationContext : ApplicationContext
             await _controller.SetStartupPreferencesAsync(
                 enabled,
                 _controller.State.StartMinimized,
+                _controller.State.AutoParkDelayMinutes,
                 CancellationToken.None);
             _mainForm.ClearRuntimeWarning("startup");
         }

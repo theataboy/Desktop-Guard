@@ -10,4 +10,5 @@ public enum ShortcutOperation
     Renaming,
     DeletingToRecycleBin,
     DeletingPermanently,
+    RemovingRecoveryDuplicate,
 }

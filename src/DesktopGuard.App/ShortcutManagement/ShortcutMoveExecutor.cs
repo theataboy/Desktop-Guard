@@ -3,17 +3,23 @@ namespace DesktopGuard.App.ShortcutManagement;
 internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
 {
     private readonly IShortcutElevationBroker _elevationBroker;
-    private readonly Action<string, string, Guid, bool, bool> _move;
+    private readonly Action<string, string, Guid, bool, bool, byte[]?> _move;
 
     public ShortcutMoveExecutor(IShortcutElevationBroker elevationBroker)
-        : this(elevationBroker, (source, destination, operationId, allowExisting, preserveHidden) =>
-            ShortcutFileTransfer.Move(source, destination, operationId, allowExisting, preserveHidden))
+        : this(elevationBroker, (source, destination, operationId, allowExisting, preserveHidden, expectedHash) =>
+            ShortcutFileTransfer.Move(
+                source,
+                destination,
+                operationId,
+                allowExisting,
+                preserveHidden,
+                expectedSourceContentHash: expectedHash))
     {
     }
 
     internal ShortcutMoveExecutor(
         IShortcutElevationBroker elevationBroker,
-        Action<string, string, Guid, bool, bool> move)
+        Action<string, string, Guid, bool, bool, byte[]?> move)
     {
         ArgumentNullException.ThrowIfNull(elevationBroker);
         ArgumentNullException.ThrowIfNull(move);
@@ -26,7 +32,9 @@ internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
         string destinationPath,
         Guid operationId,
         ElevatedShortcutOperationRequest elevatedRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowElevation = true,
+        byte[]? expectedSourceContentHash = null)
     {
         await ExecuteMoveAsync(
             sourcePath,
@@ -34,7 +42,9 @@ internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
             operationId,
             elevatedRequest,
             allowExistingDestination: false,
-            cancellationToken).ConfigureAwait(false);
+            allowElevation: allowElevation,
+            expectedSourceContentHash: expectedSourceContentHash,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RetryAsync(
@@ -51,7 +61,9 @@ internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
             operationId,
             elevatedRequest with { IsRetry = true },
             allowExistingDestination: true,
-            cancellationToken).ConfigureAwait(false);
+            allowElevation: true,
+            expectedSourceContentHash: null,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ExecuteMoveAsync(
@@ -60,6 +72,8 @@ internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
         Guid operationId,
         ElevatedShortcutOperationRequest elevatedRequest,
         bool allowExistingDestination,
+        bool allowElevation,
+        byte[]? expectedSourceContentHash,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -70,10 +84,16 @@ internal sealed class ShortcutMoveExecutor : IShortcutMoveExecutor
                 destinationPath,
                 operationId,
                 allowExistingDestination,
-                elevatedRequest.Kind == ElevatedShortcutOperationKind.ParkToRecovery);
+                elevatedRequest.Kind == ElevatedShortcutOperationKind.ParkToRecovery,
+                expectedSourceContentHash);
         }
         catch (Exception exception) when (IsAccessDenied(exception))
         {
+            if (!allowElevation)
+            {
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.AccessDenied, exception);
+            }
+
             await _elevationBroker.ExecuteAsync(elevatedRequest, cancellationToken).ConfigureAwait(false);
             ShortcutFileTransfer.ValidateCompletedMove(sourcePath, destinationPath);
         }

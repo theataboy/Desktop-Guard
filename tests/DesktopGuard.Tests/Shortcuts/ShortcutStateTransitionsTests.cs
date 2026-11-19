@@ -52,6 +52,87 @@ public sealed class ShortcutStateTransitionsTests
     }
 
     [TestMethod]
+    public void AutomaticParking_PersistsIntentAndCompletesAsPendingRecoveryRecord()
+    {
+        byte[] identityHash = System.Security.Cryptography.SHA256.HashData("launch identity"u8);
+        TrackedShortcut parkedRule = CreateShortcut(DesktopRootKind.User) with
+        {
+            Status = ShortcutStatus.Parked,
+            StatusBeforeParking = ShortcutStatus.ApprovedVisible,
+            RecoveryFolderId = Guid.NewGuid(),
+            ShortcutIdentityHash = identityHash,
+        };
+        TrackedShortcut recreated = CreateShortcut(DesktopRootKind.User) with
+        {
+            Name = "Recreated.lnk",
+            OriginalPath = Path.Combine(CreateShortcut(DesktopRootKind.User).RootPath, "Recreated.lnk"),
+        };
+        DesktopGuardState state = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(
+                    DesktopRootKind.User,
+                    parkedRule.RootPath,
+                    IsBaselined: true,
+                    KnownPaths: [recreated.OriginalPath]),
+            ],
+            Shortcuts = [parkedRule, recreated],
+        };
+
+        DesktopGuardState scheduled = ShortcutStateTransitions.ScheduleAutoParking(
+            state,
+            recreated.Id,
+            identityHash,
+            identityHash,
+            DateTimeOffset.UtcNow);
+        DesktopGuardState intent = ShortcutStateTransitions.BeginAutomaticParking(
+            scheduled,
+            recreated.Id,
+            Guid.NewGuid());
+        DesktopGuardState parkedAgain = ShortcutStateTransitions.CompleteParking(
+            intent,
+            recreated.Id,
+            identityHash);
+
+        TrackedShortcut result = parkedAgain.Shortcuts.Single(shortcut => shortcut.Id == recreated.Id);
+        Assert.AreEqual(ShortcutStatus.Parked, result.Status);
+        Assert.AreEqual(ShortcutStatus.Pending, result.StatusBeforeParking);
+        Assert.AreEqual(ShortcutOperation.None, result.Operation);
+        Assert.IsNotNull(result.ShortcutIdentityHash);
+        Assert.IsTrue(identityHash.AsSpan().SequenceEqual(result.ShortcutIdentityHash));
+        Assert.IsTrue(DesktopStateValidator.IsValid(parkedAgain));
+    }
+
+    [TestMethod]
+    public void CancelParking_PreservesApprovedStatusAndClearsStaleIdentity()
+    {
+        TrackedShortcut shortcut = CreateShortcut(DesktopRootKind.User) with
+        {
+            Status = ShortcutStatus.ApprovedVisible,
+            ShortcutIdentityHash = new byte[32],
+        };
+        DesktopGuardState state = new() { Shortcuts = [shortcut] };
+        DesktopGuardState pending = ShortcutStateTransitions.BeginParking(state, shortcut.Id, Guid.NewGuid());
+        TrackedShortcut result = ShortcutStateTransitions.CancelParking(pending, shortcut.Id).Shortcuts.Single();
+        Assert.AreEqual(ShortcutStatus.ApprovedVisible, result.Status);
+        Assert.IsNull(result.ShortcutIdentityHash);
+    }
+
+    [TestMethod]
+    public void SetAutoParkDelayMinutes_RejectsValuesOutsideConfiguredRange()
+    {
+        DesktopGuardState state = new();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ShortcutStateTransitions.SetAutoParkDelayMinutes(state, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ShortcutStateTransitions.SetAutoParkDelayMinutes(state, 31));
+        Assert.AreEqual(2, ShortcutStateTransitions.SetAutoParkDelayMinutes(state, 2).AutoParkDelayMinutes);
+        Assert.AreEqual(30, ShortcutStateTransitions.SetAutoParkDelayMinutes(state, 30).AutoParkDelayMinutes);
+    }
+
+    [TestMethod]
     public void BeginParking_AllowsPublicShortcut()
     {
         TrackedShortcut publicShortcut = CreateShortcut(DesktopRootKind.Public);

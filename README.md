@@ -4,7 +4,7 @@ Desktop Guard (DG) is a Windows 11 system-tray app that watches desktop shortcut
 
 ## Product overview
 
-DG monitors `.lnk` and `.url` shortcuts on the signed-in user's Desktop and Public Desktop. The first complete scan establishes each baseline; new shortcuts remain pending until the user reviews them. Desktop file operations are explicit and recovery-aware.
+DG monitors `.lnk` and `.url` shortcuts on the signed-in user's Desktop and Public Desktop. The first complete scan establishes each baseline; new shortcuts remain pending until the user reviews them. DG can recognize a recreated shortcut with the same saved launch settings as a still-parked shortcut and automatically re-park it after the configured delay. Recovery duplicates with matching launch fingerprints are removed automatically, keeping the newest last-write date within each Desktop. Desktop file operations remain recovery-aware.
 
 For end-user installation, usage, update, relocation, and removal instructions, see [README.portable.md](README.portable.md). The portable ZIP includes that guide as `README.md`.
 

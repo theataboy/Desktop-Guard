@@ -51,6 +51,24 @@
   <data name="StartMinimized" xml:space="preserve">
     <value>Start minimized</value>
   </data>
+  <data name="AutoParkDelayMinutes" xml:space="preserve">
+    <value>Automatically park a matching shortcut after (minutes)</value>
+  </data>
+  <data name="ScheduledForAutoParking" xml:space="preserve">
+    <value>Scheduled for auto-parking</value>
+  </data>
+  <data name="RecoveryDuplicatesRemovedTitle" xml:space="preserve">
+    <value>Recovery duplicates removed</value>
+  </data>
+  <data name="RecoveryDuplicatesRemovedFormat" xml:space="preserve">
+    <value>DG removed {0} duplicate Recovery shortcut(s), keeping the newest copy for each Desktop and launch setting.</value>
+  </data>
+  <data name="RecoveryDuplicateRemovalFailedFormat" xml:space="preserve">
+    <value>DG could not safely check or remove {0} Recovery duplicate(s). The remaining files were preserved.</value>
+  </data>
+  <data name="ShortcutIdentityUnavailableFormat" xml:space="preserve">
+    <value>DG could not identify {0} parked shortcut(s). Re-created copies will still need review.</value>
+  </data>
   <data name="More" xml:space="preserve">
     <value>&amp;More</value>
   </data>
@@ -61,13 +79,25 @@
     <value>S&amp;ettings</value>
   </data>
   <data name="SettingsDescription" xml:space="preserve">
-    <value>Choose whether Desktop Guard starts automatically when you sign in and whether it opens minimized to the notification area.</value>
+    <value>Choose whether Desktop Guard starts at sign-in, starts minimized, and how long a matching recreated shortcut waits before it is parked again.</value>
   </data>
   <data name="Save" xml:space="preserve">
     <value>Save</value>
   </data>
   <data name="Cancel" xml:space="preserve">
     <value>Cancel</value>
+  </data>
+  <data name="SaveSettingsButton" xml:space="preserve">
+    <value>&amp;Save</value>
+  </data>
+  <data name="ApplySettingsButton" xml:space="preserve">
+    <value>&amp;Apply</value>
+  </data>
+  <data name="CancelSettingsButton" xml:space="preserve">
+    <value>&amp;Cancel</value>
+  </data>
+  <data name="SaveSettingsBeforeClosing" xml:space="preserve">
+    <value>Save your changes before closing Settings? Choose Yes to save, No to discard, or Cancel to return.</value>
   </data>
   <data name="SearchShortcuts" xml:space="preserve">
     <value>Search shortcuts</value>

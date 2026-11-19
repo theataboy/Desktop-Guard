@@ -34,6 +34,19 @@ internal static class AppStrings
 
     public static string StartMinimized => GetRequiredString(nameof(StartMinimized));
 
+    public static string AutoParkDelayMinutes => GetRequiredString(nameof(AutoParkDelayMinutes));
+
+    public static string ScheduledForAutoParking => GetRequiredString(nameof(ScheduledForAutoParking));
+
+    public static string RecoveryDuplicatesRemovedTitle => GetRequiredString(nameof(RecoveryDuplicatesRemovedTitle));
+
+    public static string RecoveryDuplicatesRemovedFormat(int count) => Format(nameof(RecoveryDuplicatesRemovedFormat), count);
+
+    public static string RecoveryDuplicateRemovalFailedFormat(int count) => Format(nameof(RecoveryDuplicateRemovalFailedFormat), count);
+
+    public static string ShortcutIdentityUnavailableFormat(int count) =>
+        Format(nameof(ShortcutIdentityUnavailableFormat), count);
+
     public static string More => GetRequiredString(nameof(More));
 
     public static string Settings => GetRequiredString(nameof(Settings));
@@ -45,6 +58,14 @@ internal static class AppStrings
     public static string Save => GetRequiredString(nameof(Save));
 
     public static string Cancel => GetRequiredString(nameof(Cancel));
+
+    public static string SaveSettingsButton => GetRequiredString(nameof(SaveSettingsButton));
+
+    public static string ApplySettingsButton => GetRequiredString(nameof(ApplySettingsButton));
+
+    public static string CancelSettingsButton => GetRequiredString(nameof(CancelSettingsButton));
+
+    public static string SaveSettingsBeforeClosing => GetRequiredString(nameof(SaveSettingsBeforeClosing));
 
     public static string SearchShortcuts => GetRequiredString(nameof(SearchShortcuts));
 

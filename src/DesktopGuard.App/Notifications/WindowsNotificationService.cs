@@ -56,6 +56,17 @@ internal sealed class WindowsNotificationService : IDisposable
 
     public void ShowNewShortcut(TrackedShortcut? shortcut, string name, bool isPublic)
     {
+        ShowNotification(isPublic ? AppStrings.PublicShortcutNotificationTitle : AppStrings.ShortcutNotificationTitle,
+            string.Format(AppStrings.ShortcutNotificationBodyFormat, SanitizeName(name)), shortcut?.Id);
+    }
+
+    public void ShowRecoveryDuplicatesRemoved(int count)
+    {
+        ShowNotification(AppStrings.RecoveryDuplicatesRemovedTitle, AppStrings.RecoveryDuplicatesRemovedFormat(count), null);
+    }
+
+    private void ShowNotification(string title, string body, Guid? shortcutId)
+    {
         if (!_registered)
         {
             return;
@@ -63,14 +74,13 @@ internal sealed class WindowsNotificationService : IDisposable
 
         try
         {
-            string safeName = SanitizeName(name);
             AppNotificationBuilder builder = new AppNotificationBuilder()
-                .AddText(isPublic ? AppStrings.PublicShortcutNotificationTitle : AppStrings.ShortcutNotificationTitle)
-                .AddText(string.Format(AppStrings.ShortcutNotificationBodyFormat, safeName));
+                .AddText(title)
+                .AddText(body);
 
-            if (shortcut is not null && shortcut.Id != Guid.Empty)
+            if (shortcutId is Guid id && id != Guid.Empty)
             {
-                builder.AddArgument("shortcutId", shortcut.Id.ToString("N"));
+                builder.AddArgument("shortcutId", id.ToString("N"));
             }
 
             _manager?.Show(builder.BuildNotification());

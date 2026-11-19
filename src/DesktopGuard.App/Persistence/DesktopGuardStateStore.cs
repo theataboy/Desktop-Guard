@@ -130,6 +130,20 @@ internal sealed class DesktopGuardStateStore : IDesktopGuardStateStore
                 return MigrateCreatingShortcuts(state);
             }
 
+            if (schemaVersion == 6 && DesktopStateValidator.IsValidVersionSix(state))
+            {
+                return state with
+                {
+                    SchemaVersion = DesktopGuardState.CurrentSchemaVersion,
+                    AutoParkDelayMinutes = 5,
+                };
+            }
+
+            if (schemaVersion == 7 && DesktopStateValidator.IsValidVersionSeven(state))
+            {
+                return state with { SchemaVersion = DesktopGuardState.CurrentSchemaVersion };
+            }
+
             if (schemaVersion != DesktopGuardState.CurrentSchemaVersion || !DesktopStateValidator.IsValid(state))
             {
                 throw new StateStoreException(StateStoreFailureKind.Corrupt);
