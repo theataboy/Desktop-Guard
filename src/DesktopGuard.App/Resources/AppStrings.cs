@@ -28,6 +28,14 @@ internal static class AppStrings
 
     public static string AboutLicenseLink => GetRequiredString(nameof(AboutLicenseLink));
 
+    public static string LicenseDialogTitle => GetRequiredString(nameof(LicenseDialogTitle));
+
+    public static string LicenseTextAccessibleName => GetRequiredString(nameof(LicenseTextAccessibleName));
+
+    public static string CloseButtonText => GetRequiredString(nameof(CloseButtonText));
+
+    public static string AboutLicenseReadFailure => GetRequiredString(nameof(AboutLicenseReadFailure));
+
     public static string AboutReadmeLink => GetRequiredString(nameof(AboutReadmeLink));
 
     public static string AboutCopyVersionInformationLink => GetRequiredString(nameof(AboutCopyVersionInformationLink));

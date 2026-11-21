@@ -20,7 +20,7 @@ For end-user installation, usage, update, relocation, and removal instructions, 
 
 Core has no dependency on the Windows app. Production code does not reference test projects. See `AGENTS.md` for file ownership and security rules.
 
-Desktop Guard is licensed under MIT-0; see [LICENSE](LICENSE). Third-party dependencies and bundled runtime components remain under their respective licenses.
+Desktop Guard is licensed under the MIT License; see [LICENSE](LICENSE). Third-party dependencies and bundled runtime components remain under their respective licenses.
 
 ## Requirements
 

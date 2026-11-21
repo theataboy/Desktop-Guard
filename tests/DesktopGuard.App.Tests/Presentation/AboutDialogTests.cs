@@ -32,7 +32,7 @@ public sealed class AboutDialogTests
             Assert.IsTrue(controls.OfType<Label>().Any(label => label.Text == "Version: 1.0.1"));
             Assert.IsTrue(controls.OfType<Label>().Any(label => label.Text == "Build date: 21-11-2026"));
             CollectionAssert.AreEquivalent(
-                new[] { "Desktop Guard releases", "Open LICENSE", "Open README.html", "Copy version information" },
+                new[] { "Desktop Guard releases", "View LICENSE", "Open README.html", "Copy version information" },
                 controls.OfType<LinkLabel>().Select(link => link.Text).ToArray());
         });
     }

@@ -43,7 +43,19 @@
     <value>Desktop Guard could not open a browser for the Releases page. If a browser opens but the page is unavailable, check the message shown by your browser.</value>
   </data>
   <data name="AboutLicenseLink" xml:space="preserve">
-    <value>Open LICENSE</value>
+    <value>View LICENSE</value>
+  </data>
+  <data name="LicenseDialogTitle" xml:space="preserve">
+    <value>Desktop Guard License</value>
+  </data>
+  <data name="LicenseTextAccessibleName" xml:space="preserve">
+    <value>License terms</value>
+  </data>
+  <data name="CloseButtonText" xml:space="preserve">
+    <value>&amp;Close</value>
+  </data>
+  <data name="AboutLicenseReadFailure" xml:space="preserve">
+    <value>Desktop Guard could not display LICENSE. Check that it is available beside the running application.</value>
   </data>
   <data name="AboutReadmeLink" xml:space="preserve">
     <value>Open README.html</value>

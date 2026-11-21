@@ -34,4 +34,4 @@ Desktop Guard never executes or resolves shortcut targets. If an explicit file a
 
 Turn off **Start at sign-in**, exit Desktop Guard from the tray menu, then delete the program folder. Desktop Guard leaves `%LOCALAPPDATA%\DesktopGuard` intact so Recovery data is not lost. Review or restore anything there before manually deleting that data folder.
 
-The ZIP contains the self-contained executable, this guide as `README.html` and `README.md`, the Desktop Guard icon used by the HTML guide, and the MIT-0 license. Desktop Guard does not install a service or updater. The executable is unsigned; Windows may show a downloaded-file security prompt depending on your system policy. See [LICENSE](LICENSE) for license terms.
+The ZIP contains the self-contained executable, this guide as `README.html` and `README.md`, the Desktop Guard icon used by the HTML guide, and the MIT License. Desktop Guard does not install a service or updater. The executable is unsigned; Windows may show a downloaded-file security prompt depending on your system policy. See [LICENSE](LICENSE) for license terms.

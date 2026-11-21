@@ -104,9 +104,7 @@ internal sealed class AboutDialog : Form
         detailsPanel.Controls.Add(CreateLink(
             "licenseLink",
             AppStrings.AboutLicenseLink,
-            (_, _) => RunExternalAction(
-                _actionLauncher.OpenLicense,
-                AppStrings.AboutOpenFailureFormat("LICENSE"))));
+            (_, _) => ShowLicense()));
         detailsPanel.Controls.Add(CreateLink(
             "readmeLink",
             AppStrings.AboutReadmeLink,
@@ -220,6 +218,28 @@ internal sealed class AboutDialog : Form
             or ArgumentException)
         {
             ShowExternalActionFailure(failureMessage);
+        }
+    }
+
+    private void ShowLicense()
+    {
+        try
+        {
+            using LicenseDialog dialog = new(_actionLauncher.ReadLicenseText());
+            dialog.ShowDialog(this);
+        }
+        catch (AboutActionLauncher.PackageFileMissingException exception)
+        {
+            ShowExternalActionFailure(AppStrings.AboutPackageFileMissingFormat(
+                exception.PackageFileName,
+                exception.PackagePath));
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or SecurityException
+            or ArgumentException)
+        {
+            ShowExternalActionFailure(AppStrings.AboutLicenseReadFailure);
         }
     }
 

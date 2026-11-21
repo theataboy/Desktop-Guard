@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Security;
+using System.Text;
 
 namespace DesktopGuard.App.Presentation;
 
 internal sealed class AboutActionLauncher
 {
     internal const string ReleasesUrl = "https://github.com/theataboy/Desktop-Guard/releases";
+    private const int MaximumLicenseBytes = 64 * 1024;
 
     private readonly string _applicationDirectory;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
@@ -27,17 +29,31 @@ internal sealed class AboutActionLauncher
         });
     }
 
-    public void OpenLicense()
+    public string ReadLicenseText()
     {
         string licensePath = ResolvePackageFile("LICENSE");
-        string systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
-        string notepadPath = Path.Combine(systemDirectory, "notepad.exe");
-        ProcessStartInfo startInfo = new(notepadPath)
+        using FileStream stream = new(licensePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        byte[] buffer = new byte[MaximumLicenseBytes + 1];
+        int totalBytesRead = 0;
+        while (totalBytesRead < buffer.Length)
         {
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add(licensePath);
-        Start(startInfo);
+            int bytesRead = stream.Read(buffer, totalBytesRead, buffer.Length - totalBytesRead);
+            if (bytesRead == 0)
+            {
+                break;
+            }
+
+            totalBytesRead += bytesRead;
+        }
+
+        if (totalBytesRead > MaximumLicenseBytes)
+        {
+            throw new IOException("The packaged license exceeds its size limit.");
+        }
+
+        string licenseText = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+            .GetString(buffer, 0, totalBytesRead);
+        return licenseText.TrimStart('\uFEFF');
     }
 
     public void OpenReadme()

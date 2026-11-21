@@ -42,25 +42,14 @@ public sealed class AboutActionLauncherTests
     }
 
     [TestMethod]
-    public void OpenLicense_StartsNotepadWithThePackageLicenseAsOneArgument()
+    public void ReadLicenseText_ReturnsThePackageLicenseContents()
     {
         string licensePath = Path.Combine(_temporaryDirectory, "LICENSE");
-        File.WriteAllText(licensePath, "test license");
-        ProcessStartInfo? started = null;
-        AboutActionLauncher launcher = new(_temporaryDirectory, startInfo =>
-        {
-            started = startInfo;
-            return new Process();
-        });
+        const string licenseText = "test license";
+        File.WriteAllText(licensePath, licenseText);
+        AboutActionLauncher launcher = new(_temporaryDirectory);
 
-        launcher.OpenLicense();
-
-        Assert.IsNotNull(started);
-        Assert.AreEqual(
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe"),
-            started.FileName);
-        Assert.IsFalse(started.UseShellExecute);
-        CollectionAssert.AreEqual(new[] { licensePath }, started.ArgumentList.ToArray());
+        Assert.AreEqual(licenseText, launcher.ReadLicenseText());
     }
 
     [TestMethod]
@@ -93,21 +82,12 @@ public sealed class AboutActionLauncherTests
     }
 
     [TestMethod]
-    public void OpenLicense_ReportsWhenTheFileIsMissing()
+    public void ReadLicenseText_ReportsWhenTheFileIsMissing()
     {
         AboutActionLauncher launcher = new(_temporaryDirectory, _ =>
             throw new AssertFailedException("No process should be started."));
 
-        Assert.Throws<AboutActionLauncher.PackageFileMissingException>(launcher.OpenLicense);
-    }
-
-    [TestMethod]
-    public void OpenLicense_ReportsAProcessStartFailure()
-    {
-        File.WriteAllText(Path.Combine(_temporaryDirectory, "LICENSE"), "test license");
-        AboutActionLauncher launcher = new(_temporaryDirectory, _ => null);
-
-        Assert.Throws<InvalidOperationException>(launcher.OpenLicense);
+        Assert.Throws<AboutActionLauncher.PackageFileMissingException>(launcher.ReadLicenseText);
     }
 
     [TestMethod]
