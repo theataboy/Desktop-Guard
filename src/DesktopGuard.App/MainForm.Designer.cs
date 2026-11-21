@@ -317,7 +317,7 @@ partial class MainForm
         entriesGrid.RowHeadersVisible = false;
         entriesGrid.RowTemplate.Height = 30;
         entriesGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        entriesGrid.ShowCellToolTips = true;
+        entriesGrid.ShowCellToolTips = false;
         entriesPanel.Controls.Add(entriesGrid);
         entriesPanel.Controls.Add(emptyStateLabel);
         entriesPanel.Dock = DockStyle.Fill;
