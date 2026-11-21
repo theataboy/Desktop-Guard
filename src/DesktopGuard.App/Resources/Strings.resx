@@ -15,6 +15,57 @@
   <data name="ApplicationTitle" xml:space="preserve">
     <value>Desktop Guard</value>
   </data>
+  <data name="AboutButtonAccessibleName" xml:space="preserve">
+    <value>About Desktop Guard</value>
+  </data>
+  <data name="AboutTitle" xml:space="preserve">
+    <value>About Desktop Guard</value>
+  </data>
+  <data name="AboutProductName" xml:space="preserve">
+    <value>Desktop Guard</value>
+  </data>
+  <data name="AboutLogoAccessibleName" xml:space="preserve">
+    <value>Desktop Guard logo</value>
+  </data>
+  <data name="AboutValueUnavailable" xml:space="preserve">
+    <value>Unavailable</value>
+  </data>
+  <data name="AboutVersionFormat" xml:space="preserve">
+    <value>Version: {0}</value>
+  </data>
+  <data name="AboutBuildDateFormat" xml:space="preserve">
+    <value>Build date: {0}</value>
+  </data>
+  <data name="AboutReleasesLink" xml:space="preserve">
+    <value>Desktop Guard releases</value>
+  </data>
+  <data name="AboutReleasesOpenFailure" xml:space="preserve">
+    <value>Desktop Guard could not open a browser for the Releases page. If a browser opens but the page is unavailable, check the message shown by your browser.</value>
+  </data>
+  <data name="AboutLicenseLink" xml:space="preserve">
+    <value>Open LICENSE</value>
+  </data>
+  <data name="AboutReadmeLink" xml:space="preserve">
+    <value>Open README.html</value>
+  </data>
+  <data name="AboutCopyVersionInformationLink" xml:space="preserve">
+    <value>Copy version information</value>
+  </data>
+  <data name="AboutVersionInformationCopied" xml:space="preserve">
+    <value>Version information copied.</value>
+  </data>
+  <data name="AboutClipboardFailure" xml:space="preserve">
+    <value>Desktop Guard could not copy the version information to the clipboard.</value>
+  </data>
+  <data name="AboutVersionInformationFormat" xml:space="preserve">
+    <value>Desktop Guard version {0}; build date {1}</value>
+  </data>
+  <data name="AboutOpenFailureFormat" xml:space="preserve">
+    <value>Desktop Guard could not open {0}. Check that the file and its Windows application are available.</value>
+  </data>
+  <data name="AboutPackageFileMissingFormat" xml:space="preserve">
+    <value>Desktop Guard could not find {0} at {1}. Extract or restore it beside the running application.</value>
+  </data>
   <data name="ScanNow" xml:space="preserve">
     <value>Scan now</value>
   </data>

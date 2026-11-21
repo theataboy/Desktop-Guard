@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\DesktopGuard.Core\DesktopGuard.Core.csproj" />
@@ -16,6 +16,11 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SatelliteResourceLanguages>en-US</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildDateUtc" Value="$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))" />
+    <EmbeddedResource Include="Resources\DesktopGuard.ico" LogicalName="DesktopGuard.App.Resources.DesktopGuard.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\ApplicationMetadata.dat" LogicalName="DesktopGuard.App.Data.ApplicationMetadata" />

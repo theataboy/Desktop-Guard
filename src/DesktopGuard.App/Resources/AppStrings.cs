@@ -10,6 +10,42 @@ internal static class AppStrings
 
     public static string ApplicationTitle => GetRequiredString(nameof(ApplicationTitle));
 
+    public static string AboutButtonAccessibleName => GetRequiredString(nameof(AboutButtonAccessibleName));
+
+    public static string AboutTitle => GetRequiredString(nameof(AboutTitle));
+
+    public static string AboutProductName => GetRequiredString(nameof(AboutProductName));
+
+    public static string AboutLogoAccessibleName => GetRequiredString(nameof(AboutLogoAccessibleName));
+
+    public static string AboutValueUnavailable => GetRequiredString(nameof(AboutValueUnavailable));
+
+    public static string AboutVersionFormat(string version) => Format(nameof(AboutVersionFormat), version);
+
+    public static string AboutBuildDateFormat(string date) => Format(nameof(AboutBuildDateFormat), date);
+
+    public static string AboutReleasesLink => GetRequiredString(nameof(AboutReleasesLink));
+
+    public static string AboutLicenseLink => GetRequiredString(nameof(AboutLicenseLink));
+
+    public static string AboutReadmeLink => GetRequiredString(nameof(AboutReadmeLink));
+
+    public static string AboutCopyVersionInformationLink => GetRequiredString(nameof(AboutCopyVersionInformationLink));
+
+    public static string AboutReleasesOpenFailure => GetRequiredString(nameof(AboutReleasesOpenFailure));
+
+    public static string AboutVersionInformationCopied => GetRequiredString(nameof(AboutVersionInformationCopied));
+
+    public static string AboutClipboardFailure => GetRequiredString(nameof(AboutClipboardFailure));
+
+    public static string AboutVersionInformationFormat(string version, string date) =>
+        Format(nameof(AboutVersionInformationFormat), version, date);
+
+    public static string AboutOpenFailureFormat(string target) => Format(nameof(AboutOpenFailureFormat), target);
+
+    public static string AboutPackageFileMissingFormat(string fileName, string path) =>
+        Format(nameof(AboutPackageFileMissingFormat), fileName, path);
+
     public static string ScanNow => GetRequiredString(nameof(ScanNow));
 
     public static string ScanNowButton => GetRequiredString(nameof(ScanNowButton));

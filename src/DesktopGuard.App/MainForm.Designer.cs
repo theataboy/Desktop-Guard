@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using DesktopGuard.App.Resources;
 
 namespace DesktopGuard.App;
 
@@ -9,6 +10,10 @@ partial class MainForm
     private TableLayoutPanel mainLayout = null!;
 
     private Label titleLabel = null!;
+
+    private TableLayoutPanel titlePanel = null!;
+
+    private Button aboutButton = null!;
 
     private Label statusLabel = null!;
 
@@ -86,7 +91,9 @@ partial class MainForm
     {
         components = new Container();
         mainLayout = new TableLayoutPanel();
+        titlePanel = new TableLayoutPanel();
         titleLabel = new Label();
+        aboutButton = new Button();
         statusLabel = new Label();
         commandPanel = new FlowLayoutPanel();
         scanButton = new Button();
@@ -119,6 +126,7 @@ partial class MainForm
         issuesToggleButton = new Button();
         issuesListBox = new ListBox();
         mainLayout.SuspendLayout();
+        titlePanel.SuspendLayout();
         commandPanel.SuspendLayout();
         moreMenu.SuspendLayout();
         filterPanel.SuspendLayout();
@@ -131,7 +139,7 @@ partial class MainForm
         //
         mainLayout.ColumnCount = 1;
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        mainLayout.Controls.Add(titleLabel, 0, 0);
+        mainLayout.Controls.Add(titlePanel, 0, 0);
         mainLayout.Controls.Add(statusLabel, 0, 1);
         mainLayout.Controls.Add(commandPanel, 0, 2);
         mainLayout.Controls.Add(filterPanel, 0, 3);
@@ -156,6 +164,32 @@ partial class MainForm
         titleLabel.Font = new Font("Segoe UI Semibold", 18F, FontStyle.Bold, GraphicsUnit.Point);
         titleLabel.Margin = new Padding(0, 0, 0, 2);
         titleLabel.Name = "titleLabel";
+        //
+        // titlePanel
+        //
+        titlePanel.AutoSize = true;
+        titlePanel.ColumnCount = 2;
+        titlePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        titlePanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        titlePanel.Controls.Add(titleLabel, 0, 0);
+        titlePanel.Controls.Add(aboutButton, 1, 0);
+        titlePanel.Dock = DockStyle.Fill;
+        titlePanel.Margin = new Padding(0, 0, 0, 2);
+        titlePanel.Name = "titlePanel";
+        titlePanel.RowCount = 1;
+        titlePanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        //
+        // aboutButton
+        //
+        aboutButton.AccessibleName = AppStrings.AboutButtonAccessibleName;
+        aboutButton.AutoSize = false;
+        aboutButton.Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold, GraphicsUnit.Point);
+        aboutButton.Margin = new Padding(4, 0, 0, 2);
+        aboutButton.Name = "aboutButton";
+        aboutButton.Size = new Size(30, 30);
+        aboutButton.TabIndex = 1;
+        aboutButton.Text = "i";
+        aboutButton.UseVisualStyleBackColor = true;
         //
         // statusLabel
         //
@@ -413,6 +447,8 @@ partial class MainForm
         StartPosition = FormStartPosition.CenterScreen;
         mainLayout.ResumeLayout(false);
         mainLayout.PerformLayout();
+        titlePanel.ResumeLayout(false);
+        titlePanel.PerformLayout();
         commandPanel.ResumeLayout(false);
         commandPanel.PerformLayout();
         moreMenu.ResumeLayout(false);

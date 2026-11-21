@@ -214,6 +214,18 @@ internal static class WindowsTheme
             return;
         }
 
+        if (control is LinkLabel linkLabel)
+        {
+            Color linkColor = SystemInformation.HighContrast ? SystemColors.HotTrack : palette.Accent;
+            linkLabel.BackColor = Color.Transparent;
+            linkLabel.ForeColor = linkColor;
+            linkLabel.LinkColor = linkColor;
+            linkLabel.ActiveLinkColor = linkColor;
+            linkLabel.VisitedLinkColor = linkColor;
+            linkLabel.DisabledLinkColor = palette.MutedText;
+            return;
+        }
+
         if (control is Label label)
         {
             label.ForeColor = label.Name == "statusLabel" ? palette.MutedText : palette.Text;

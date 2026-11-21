@@ -48,6 +48,7 @@ internal partial class MainForm : Form
         Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath)
             ?? SystemIcons.Application;
         scanButton.Text = AppStrings.ScanNowButton;
+        new ToolTip(components).SetToolTip(aboutButton, AppStrings.AboutButtonAccessibleName);
         addDesktopShortcutButton.Text = AppStrings.AddDesktopShortcutButton;
         moreButton.Text = AppStrings.More;
         openRecoveryFolderMenuItem.Text = AppStrings.OpenRecoveryFolderMenuItem;
@@ -72,6 +73,7 @@ internal partial class MainForm : Form
         emptyStateLabel.Text = AppStrings.NoShortcuts;
 
         scanButton.Click += async (_, _) => await ScanNowAsync();
+        aboutButton.Click += (_, _) => ShowAboutDialog();
         addDesktopShortcutButton.Click += async (_, _) => await AddDesktopShortcutAsync();
         moreButton.Click += (_, _) => ShowMoreMenu();
         openRecoveryFolderMenuItem.Click += (_, _) => OpenRecoveryFolder();
@@ -132,6 +134,16 @@ internal partial class MainForm : Form
             _deleteShortcutMenuItem,
         ]);
         actionPanel.Controls.Add(_shortcutActionsButton);
+    }
+
+    private void ShowAboutDialog()
+    {
+        string applicationDirectory = Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath)
+            ?? throw new InvalidOperationException("The Desktop Guard executable path has no parent directory.");
+        using AboutDialog dialog = new(
+            AboutInformation.FromAssembly(typeof(MainForm).Assembly),
+            new AboutActionLauncher(applicationDirectory));
+        dialog.ShowDialog(this);
     }
 
     private void ShowShortcutActionsMenu()
