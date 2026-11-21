@@ -141,8 +141,12 @@ internal sealed class ShortcutFileManager
     }
 
     public ShortcutIdentityReadResult? TryReadDesktopIdentity(DesktopInventoryEntry entry)
+        => TryReadDesktopIdentity(entry, out _);
+
+    public ShortcutIdentityReadResult? TryReadDesktopIdentity(DesktopInventoryEntry entry, out int chargedBytes)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        chargedBytes = GetIdentityReservation(entry.Name);
         if (entry.Kind != DesktopEntryKind.Shortcut
             || !DesktopCandidatePolicy.IsValidWindowsFileName(entry.Name)
             || !DesktopCandidatePolicy.IsDirectChildOf(entry.RootPath, entry.Path)
@@ -154,20 +158,26 @@ internal sealed class ShortcutFileManager
         string root = GetCurrentDesktopRoot(entry.RootKind, entry.RootPath);
         string path = Path.GetFullPath(entry.Path);
         ValidateRegularFile(path, root);
-        return _identityReader.TryRead(path);
+        return _identityReader.TryRead(path, out chargedBytes);
     }
 
     public ShortcutIdentityReadResult? TryReadParkedIdentity(TrackedShortcut shortcut)
+        => TryReadParkedIdentity(shortcut, out _);
+
+    public ShortcutIdentityReadResult? TryReadParkedIdentity(TrackedShortcut shortcut, out int chargedBytes)
     {
         ArgumentNullException.ThrowIfNull(shortcut);
+        chargedBytes = GetIdentityReservation(shortcut.Name);
         if (shortcut.Status != ShortcutStatus.Parked || shortcut.Operation != ShortcutOperation.None)
         {
             return null;
         }
 
         string path = GetTrackedShortcutPath(shortcut);
-        return _identityReader.TryRead(path);
+        return _identityReader.TryRead(path, out chargedBytes);
     }
+
+    internal static int GetIdentityReservation(string name) => ShortcutIdentityReader.GetReadReservation(name);
 
     public ShortcutIdentityReadResult? TryReadRecoveryIdentityForParking(TrackedShortcut shortcut)
     {

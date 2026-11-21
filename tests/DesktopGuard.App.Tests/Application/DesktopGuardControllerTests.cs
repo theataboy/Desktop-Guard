@@ -14,6 +14,86 @@ namespace DesktopGuard.App.Tests.Application;
 public sealed class DesktopGuardControllerTests
 {
     [TestMethod]
+    public void IdentityReadBudget_StopsRepeatedMalformedReadsBefore64MiB()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string path = Path.Combine(temporaryDirectory.Path, "malformed.url");
+        File.WriteAllBytes(path, new byte[64 * 1024]);
+        ShortcutIdentityReader reader = new();
+        const long maximum = 64 * 1024 * 1024;
+        long charged = 0;
+        int attempts = 0;
+
+        while (DesktopGuardController.ReserveIdentityReadBudget("malformed.url", maximum, ref charged))
+        {
+            Assert.IsNull(reader.TryRead(path, out int actualCharge));
+            charged -= ShortcutFileManager.GetIdentityReservation("malformed.url") - actualCharge;
+            attempts++;
+        }
+
+        Assert.AreEqual(1023, attempts);
+        Assert.IsLessThanOrEqualTo(maximum, charged);
+        Assert.IsFalse(DesktopGuardController.ReserveIdentityReadBudget("malformed.url", maximum, ref charged));
+    }
+
+    [TestMethod]
+    public void Initialize_BackfillCountsMalformedFilesAgainstReadBudget()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        DesktopGuardStateStore store = new(data);
+        List<TrackedShortcut> parked = [];
+        string? firstInvalidPath = null;
+        for (int index = 0; index < 79; index++)
+        {
+            string name = index < 63 ? $"invalid{index}.lnk" : $"item{index}.url";
+            Guid recoveryId = Guid.NewGuid();
+            string folder = Directory.CreateDirectory(Path.Combine(store.RecoveryDirectoryPath, recoveryId.ToString("N"))).FullName;
+            string path = Path.Combine(folder, name);
+            if (index == 78)
+            {
+                File.WriteAllText(path, "[InternetShortcut]\r\nURL=https://example.invalid/valid\r\n");
+            }
+            else
+            {
+                using FileStream file = File.Create(path);
+                file.SetLength(index < 63 ? 1024 * 1024 : 64 * 1024);
+                firstInvalidPath ??= path;
+            }
+
+            parked.Add(new TrackedShortcut(Guid.NewGuid(), DesktopRootKind.User, desktop, name,
+                Path.Combine(desktop, name), ShortcutStatus.Parked, ShortcutStatus.Pending,
+                ShortcutOperation.None, recoveryId));
+        }
+
+        store.Save(new DesktopGuardState
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, []),
+                new DesktopRootCheckpoint(DesktopRootKind.Public, publicDesktop, true, []),
+            ],
+            Shortcuts = parked,
+        });
+        FixedDesktopRootProvider roots = new(desktop, publicDesktop);
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController CreateController() => new(
+            new DesktopInventoryScanner(roots), new InventoryReconciler(), store,
+            new ShortcutFileManager(roots, store, TimeSpan.Zero), new NoOpStartAtSignInManager(), notifications);
+
+        DesktopGuardController first = CreateController();
+        first.Initialize();
+        Assert.IsNull(first.State.Shortcuts.Single(item => item.Id == parked[^1].Id).ShortcutIdentityHash);
+
+        File.WriteAllText(firstInvalidPath!, "invalid");
+        DesktopGuardController second = CreateController();
+        second.Initialize();
+        Assert.IsNotNull(second.State.Shortcuts.Single(item => item.Id == parked[^1].Id).ShortcutIdentityHash);
+    }
+
+    [TestMethod]
     public void Initialize_BackfillsParkedShortcutIdentityWithoutMovingRecoveryFile()
     {
         using TemporaryDirectory temporaryDirectory = new();

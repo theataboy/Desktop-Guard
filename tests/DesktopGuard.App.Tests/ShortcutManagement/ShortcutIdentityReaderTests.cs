@@ -41,6 +41,22 @@ public sealed class ShortcutIdentityReaderTests
     }
 
     [TestMethod]
+    public void TryRead_ChargesBytesForMalformedAndOversizedShortcuts()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string malformed = Path.Combine(temporaryDirectory.Path, "malformed.url");
+        string oversized = Path.Combine(temporaryDirectory.Path, "oversized.url");
+        File.WriteAllText(malformed, "[InternetShortcut]\r\nURL=\r\n");
+        File.WriteAllBytes(oversized, new byte[64 * 1024 + 1]);
+        ShortcutIdentityReader reader = new();
+
+        Assert.IsNull(reader.TryRead(malformed, out int malformedCharge));
+        Assert.AreEqual(new FileInfo(malformed).Length + 1, malformedCharge);
+        Assert.IsNull(reader.TryRead(oversized, out int oversizedCharge));
+        Assert.AreEqual(64 * 1024 + 1, oversizedCharge);
+    }
+
+    [TestMethod]
     public void TryRead_MalformedOrOversizedInputDoesNotProduceAnIdentity()
     {
         using TemporaryDirectory temporaryDirectory = new();

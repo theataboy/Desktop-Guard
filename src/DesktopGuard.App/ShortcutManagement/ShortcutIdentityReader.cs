@@ -17,10 +17,19 @@ internal sealed class ShortcutIdentityReader
     private static readonly Guid ShellLinkClassId = new("00021401-0000-0000-C000-000000000046");
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
+    internal static int GetReadReservation(string name) =>
+        string.Equals(Path.GetExtension(name), ".url", StringComparison.OrdinalIgnoreCase)
+            ? MaximumInternetShortcutLength + 1
+            : MaximumLinkLength + 1;
+
     public ShortcutIdentityReadResult? TryRead(string path)
+        => TryRead(path, out _);
+
+    public ShortcutIdentityReadResult? TryRead(string path, out int chargedBytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         string extension = Path.GetExtension(path);
+        chargedBytes = GetReadReservation(path);
         if (!string.Equals(extension, ".lnk", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(extension, ".url", StringComparison.OrdinalIgnoreCase))
         {
@@ -38,6 +47,7 @@ internal sealed class ShortcutIdentityReader
                 return null;
             }
 
+            chargedBytes = bytes.Length + 1;
             byte[] identityHash = string.Equals(extension, ".lnk", StringComparison.OrdinalIgnoreCase)
                 ? ReadShellLinkIdentity(bytes)
                 : ReadInternetShortcutIdentity(bytes);
