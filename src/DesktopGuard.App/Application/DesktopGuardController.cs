@@ -938,30 +938,29 @@ internal sealed class DesktopGuardController
         foreach (TrackedShortcut shortcut in _state.Shortcuts.Where(shortcut =>
                      shortcut.Status == ShortcutStatus.Parked && shortcut.ShortcutIdentityHash is null))
         {
-            if (MaximumIdentityBackfillBytes - totalReadBytes < 1024 * 1024)
+            if (!ReserveIdentityReadBudget(shortcut.Name, MaximumIdentityBackfillBytes, ref totalReadBytes))
             {
-                break;
+                continue;
             }
 
             ShortcutIdentityReadResult? identity;
+            int chargedBytes = ShortcutFileManager.GetIdentityReservation(shortcut.Name);
             try
             {
-                identity = _fileManager.TryReadParkedIdentity(shortcut);
+                identity = _fileManager.TryReadParkedIdentity(shortcut, out chargedBytes);
             }
             catch (Exception exception) when (IsExpectedIdentityReadException(exception))
             {
                 continue;
             }
+            finally
+            {
+                totalReadBytes -= ShortcutFileManager.GetIdentityReservation(shortcut.Name) - chargedBytes;
+            }
 
             if (identity is null)
             {
                 continue;
-            }
-
-            totalReadBytes += identity.SourceLength;
-            if (totalReadBytes > MaximumIdentityBackfillBytes)
-            {
-                break;
             }
 
             updated = ShortcutStateTransitions.SetShortcutIdentityHash(
@@ -1016,20 +1015,25 @@ internal sealed class DesktopGuardController
             {
                 if (entry.Kind != DesktopEntryKind.Shortcut
                     || knownPaths.Contains(entry.Path) && !scheduledPaths.Contains(entry.Path)
-                    || MaximumIdentityReadBytesPerScan - totalReadBytes < 1024 * 1024)
+                    || !ReserveIdentityReadBudget(entry.Name, MaximumIdentityReadBytesPerScan, ref totalReadBytes))
                 {
                     entries.Add(entry);
                     continue;
                 }
 
                 ShortcutIdentityReadResult? identity;
+                int chargedBytes = ShortcutFileManager.GetIdentityReservation(entry.Name);
                 try
                 {
-                    identity = _fileManager.TryReadDesktopIdentity(entry);
+                    identity = _fileManager.TryReadDesktopIdentity(entry, out chargedBytes);
                 }
                 catch (Exception exception) when (IsExpectedIdentityReadException(exception))
                 {
                     identity = null;
+                }
+                finally
+                {
+                    totalReadBytes -= ShortcutFileManager.GetIdentityReservation(entry.Name) - chargedBytes;
                 }
 
                 if (identity is null)
@@ -1038,7 +1042,6 @@ internal sealed class DesktopGuardController
                     continue;
                 }
 
-                totalReadBytes += identity.SourceLength;
                 identities[entry.Path] = identity;
                 entries.Add(entry with { ShortcutIdentityHash = identity.IdentityHash, SourceContentHash = identity.SourceContentHash });
             }
@@ -1047,6 +1050,19 @@ internal sealed class DesktopGuardController
         }
 
         return (new DesktopInventorySnapshot(enrichedRoots), identities);
+    }
+
+    internal static bool ReserveIdentityReadBudget(string name, long maximumBytes, ref long reservedBytes)
+    {
+        // Reserve the entire per-file limit and the final EOF probe even if parsing fails.
+        long reservation = ShortcutFileManager.GetIdentityReservation(name);
+        if (reservedBytes > maximumBytes - reservation)
+        {
+            return false;
+        }
+
+        reservedBytes += reservation;
+        return true;
     }
 
     private async Task<List<TrackedShortcut>> AutoParkDueShortcutsAsync(
