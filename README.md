@@ -52,4 +52,4 @@ After the workflow is on GitHub, push a version tag such as `v1.0.1`. GitHub Act
 
 ## Security
 
-DG's main process runs as the signed-in user without elevation or a service. A restricted one-operation helper can be launched through UAC only after Access Denied on an explicit file action. DG treats names, paths, saved state, filesystem events, and notification activation as untrusted. It inspects direct children only, never resolves or executes shortcut targets, and fails closed on ambiguous paths, incomplete scans, unsafe state, and move conflicts. See [SECURITY.md](SECURITY.md).
+DG's main process runs as the signed-in user without elevation or a service. A restricted one-operation helper can be launched through UAC only after Access Denied on an explicit file action. DG treats names, paths, saved state, filesystem events, and notification activation as untrusted. It inspects direct children only, never resolves or executes shortcut targets, and can choose a numbered basename when restoring or moving a shortcut to an occupied Desktop name. It fails closed on ambiguous paths, incomplete scans, and unsafe state. See [SECURITY.md](SECURITY.md).

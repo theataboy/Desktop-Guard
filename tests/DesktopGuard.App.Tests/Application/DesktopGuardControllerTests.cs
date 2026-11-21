@@ -524,7 +524,90 @@ public sealed class DesktopGuardControllerTests
     }
 
     [TestMethod]
-    public async Task Move_WhenDestinationAppearsAfterScanLeavesNoStuckOperation()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RestoreOrMove_WhenTrackedDestinationWasDeleted_UsesAvailableName(bool restore)
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.url");
+        string destinationPath = Path.Combine(restore ? desktop : publicDesktop, "Program.url");
+        File.WriteAllText(sourcePath, "source shortcut");
+        if (!restore)
+        {
+            File.WriteAllText(destinationPath, "old shortcut");
+        }
+
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider), new InventoryReconciler(), stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero),
+            new NoOpStartAtSignInManager(), notifications);
+        controller.Initialize();
+        Guid sourceId = controller.State.Shortcuts.Single(item => item.RootKind == DesktopRootKind.User).Id;
+        if (restore)
+        {
+            await controller.ParkAsync(sourceId, CancellationToken.None);
+            File.WriteAllText(destinationPath, "old shortcut");
+            await controller.RefreshAsync(CancellationToken.None, showNotifications: false);
+        }
+
+        Guid oldId = controller.State.Shortcuts.Single(item => item.Id != sourceId).Id;
+        File.Delete(destinationPath);
+
+        if (restore)
+        {
+            await controller.RestoreAsync(sourceId, CancellationToken.None);
+        }
+        else
+        {
+            await controller.MoveAsync(sourceId, DesktopRootKind.Public, CancellationToken.None);
+        }
+
+        Assert.AreEqual("source shortcut", File.ReadAllText(destinationPath));
+        Assert.AreEqual("Program.url", controller.State.Shortcuts.Single(item => item.Id == sourceId).Name);
+        Assert.IsFalse(controller.State.Shortcuts.Any(item => item.Id == oldId));
+        Assert.IsTrue(DesktopStateValidator.IsValid(controller.State));
+    }
+
+    [TestMethod]
+    public async Task Move_WhenIoConflictOccursAfterStaging_CleansStagingAndAllowsRetry()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.url");
+        string destinationPath = Path.Combine(publicDesktop, "Program.url");
+        File.WriteAllText(sourcePath, "source shortcut");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider), new InventoryReconciler(), stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, new StagedIoRaceMoveExecutor(), TimeSpan.Zero),
+            new NoOpStartAtSignInManager(), notifications);
+        controller.Initialize();
+        Guid id = controller.State.Shortcuts.Single().Id;
+
+        ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
+            () => controller.MoveAsync(id, DesktopRootKind.Public, CancellationToken.None));
+        Assert.AreEqual(ShortcutFileOperationFailure.DestinationConflict, exception.Failure);
+        Assert.AreEqual("source shortcut", File.ReadAllText(sourcePath));
+        Assert.AreEqual("racing destination", File.ReadAllText(destinationPath));
+        Assert.IsEmpty(Directory.GetDirectories(publicDesktop, ".desktopguard-*"));
+        Assert.IsFalse(controller.IsOperationUnresolved(id));
+
+        await controller.MoveAsync(id, DesktopRootKind.Public, CancellationToken.None);
+        Assert.AreEqual("source shortcut", File.ReadAllText(Path.Combine(publicDesktop, "Program(2).url")));
+    }
+
+    [TestMethod]
+    public async Task Move_WhenDestinationNameIsOccupied_UsesFirstFreeSuffixedName()
     {
         using TemporaryDirectory temporaryDirectory = new();
         string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
@@ -548,14 +631,183 @@ public sealed class DesktopGuardControllerTests
         TrackedShortcut shortcut = controller.State.Shortcuts.Single();
         File.WriteAllText(destinationPath, "existing destination");
 
+        await controller.MoveAsync(shortcut.Id, DesktopRootKind.Public, CancellationToken.None);
+
+        string numberedDestinationPath = Path.Combine(publicDesktop, "Program(2).lnk");
+        TrackedShortcut moved = controller.State.Shortcuts.Single();
+        Assert.AreEqual("Program(2).lnk", moved.Name);
+        Assert.AreEqual(numberedDestinationPath, moved.OriginalPath);
+        Assert.AreEqual(ShortcutOperation.None, controller.State.Shortcuts.Single().Operation);
+        Assert.IsFalse(File.Exists(sourcePath));
+        Assert.AreEqual("existing destination", File.ReadAllText(destinationPath));
+        Assert.AreEqual("source shortcut", File.ReadAllText(numberedDestinationPath));
+        Assert.IsFalse(controller.IsOperationUnresolved(shortcut.Id));
+    }
+
+    [TestMethod]
+    public async Task Move_WhenSelectedDestinationIsTakenDuringOperation_CancelsAndRetriesWithNextName()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string sourcePath = Path.Combine(desktop, "Program.lnk");
+        string destinationPath = Path.Combine(publicDesktop, "Program.lnk");
+        File.WriteAllText(sourcePath, "source shortcut");
+
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager fileManager = new(
+            rootProvider,
+            stateStore,
+            new DestinationRaceMoveExecutor(),
+            TimeSpan.Zero);
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            fileManager,
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        TrackedShortcut shortcut = controller.State.Shortcuts.Single();
+
         ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
             () => controller.MoveAsync(shortcut.Id, DesktopRootKind.Public, CancellationToken.None));
 
         Assert.AreEqual(ShortcutFileOperationFailure.DestinationConflict, exception.Failure);
         Assert.AreEqual(ShortcutOperation.None, controller.State.Shortcuts.Single().Operation);
+        Assert.IsNull(controller.State.Shortcuts.Single().TargetName);
         Assert.IsTrue(File.Exists(sourcePath));
-        Assert.AreEqual("existing destination", File.ReadAllText(destinationPath));
+        Assert.AreEqual("racing destination", File.ReadAllText(destinationPath));
         Assert.IsFalse(controller.IsOperationUnresolved(shortcut.Id));
+
+        await controller.MoveAsync(shortcut.Id, DesktopRootKind.Public, CancellationToken.None);
+
+        Assert.IsFalse(File.Exists(sourcePath));
+        Assert.AreEqual("racing destination", File.ReadAllText(destinationPath));
+        Assert.AreEqual("source shortcut", File.ReadAllText(Path.Combine(publicDesktop, "Program(2).lnk")));
+        Assert.AreEqual("Program(2).lnk", controller.State.Shortcuts.Single().Name);
+    }
+
+    [TestMethod]
+    public async Task MoveBetweenDesktops_UsesSuffixInTheDestinationFolderInEitherDirection()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string userToPublicPath = Path.Combine(desktop, "UserToPublic.url");
+        string publicUserToPublicPath = Path.Combine(publicDesktop, "UserToPublic.url");
+        string publicToUserPath = Path.Combine(publicDesktop, "PublicToUser.lnk");
+        string userPublicToUserPath = Path.Combine(desktop, "PublicToUser.lnk");
+        File.WriteAllText(userToPublicPath, "user source");
+        File.WriteAllText(publicUserToPublicPath, "public occupant");
+        File.WriteAllText(publicToUserPath, "public source");
+        File.WriteAllText(userPublicToUserPath, "user occupant");
+
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            new ShortcutFileManager(rootProvider, stateStore, TimeSpan.Zero),
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        Guid userSourceId = controller.State.Shortcuts.Single(item =>
+            item.Name == "UserToPublic.url" && item.RootKind == DesktopRootKind.User).Id;
+        Guid publicSourceId = controller.State.Shortcuts.Single(item =>
+            item.Name == "PublicToUser.lnk" && item.RootKind == DesktopRootKind.Public).Id;
+
+        await controller.MoveAsync(userSourceId, DesktopRootKind.Public, CancellationToken.None);
+        await controller.MoveAsync(publicSourceId, DesktopRootKind.User, CancellationToken.None);
+
+        Assert.AreEqual("public occupant", File.ReadAllText(publicUserToPublicPath));
+        Assert.AreEqual("user occupant", File.ReadAllText(userPublicToUserPath));
+        Assert.AreEqual("user source", File.ReadAllText(Path.Combine(publicDesktop, "UserToPublic(2).url")));
+        Assert.AreEqual("public source", File.ReadAllText(Path.Combine(desktop, "PublicToUser(2).lnk")));
+        Assert.AreEqual("UserToPublic(2).url", controller.State.Shortcuts.Single(item => item.Id == userSourceId).Name);
+        Assert.AreEqual("PublicToUser(2).lnk", controller.State.Shortcuts.Single(item => item.Id == publicSourceId).Name);
+    }
+
+    [TestMethod]
+    public async Task Restore_WhenNameIsOccupied_UsesNextFreeNameAndTracksIt()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string originalPath = Path.Combine(desktop, "Program.url");
+        File.WriteAllText(originalPath, "parked shortcut");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager fileManager = new(rootProvider, stateStore, TimeSpan.Zero);
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            fileManager,
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        TrackedShortcut parked = controller.State.Shortcuts.Single();
+        await controller.ParkAsync(parked.Id, CancellationToken.None);
+        string recoveryPath = fileManager.GetRecoveryFilePath(
+            controller.State.Shortcuts.Single(item => item.Id == parked.Id));
+        File.WriteAllText(originalPath, "replacement at original name");
+        File.WriteAllText(Path.Combine(desktop, "Program(2).url"), "second replacement");
+        await controller.RefreshAsync(CancellationToken.None, showNotifications: false);
+
+        await controller.RestoreAsync(parked.Id, CancellationToken.None);
+
+        string restoredPath = Path.Combine(desktop, "Program(3).url");
+        TrackedShortcut restored = controller.State.Shortcuts.Single(item => item.Id == parked.Id);
+        Assert.AreEqual("Program(3).url", restored.Name);
+        Assert.AreEqual(restoredPath, restored.OriginalPath);
+        Assert.AreEqual("parked shortcut", File.ReadAllText(restoredPath));
+        Assert.AreEqual("replacement at original name", File.ReadAllText(originalPath));
+        Assert.AreEqual("second replacement", File.ReadAllText(Path.Combine(desktop, "Program(2).url")));
+        Assert.IsFalse(File.Exists(recoveryPath));
+        Assert.IsTrue(DesktopStateValidator.IsValid(controller.State));
+    }
+
+    [TestMethod]
+    public async Task Restore_SameNameInOtherDesktopFolderDoesNotCauseSuffix()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        string originalPath = Path.Combine(desktop, "Program.url");
+        string publicPath = Path.Combine(publicDesktop, "Program.url");
+        File.WriteAllText(originalPath, "user shortcut");
+        File.WriteAllText(publicPath, "public shortcut");
+        FixedDesktopRootProvider rootProvider = new(desktop, publicDesktop);
+        DesktopGuardStateStore stateStore = new(data);
+        using WindowsNotificationService notifications = new();
+        ShortcutFileManager fileManager = new(rootProvider, stateStore, TimeSpan.Zero);
+        DesktopGuardController controller = new(
+            new DesktopInventoryScanner(rootProvider),
+            new InventoryReconciler(),
+            stateStore,
+            fileManager,
+            new NoOpStartAtSignInManager(),
+            notifications);
+        controller.Initialize();
+        TrackedShortcut userShortcut = controller.State.Shortcuts.Single(item => item.RootKind == DesktopRootKind.User);
+        await controller.ParkAsync(userShortcut.Id, CancellationToken.None);
+
+        await controller.RestoreAsync(userShortcut.Id, CancellationToken.None);
+
+        Assert.IsTrue(File.Exists(originalPath));
+        Assert.AreEqual("user shortcut", File.ReadAllText(originalPath));
+        Assert.AreEqual("public shortcut", File.ReadAllText(publicPath));
+        Assert.AreEqual("Program.url", controller.State.Shortcuts.Single(item => item.Id == userShortcut.Id).Name);
     }
 
     [TestMethod]
@@ -908,6 +1160,81 @@ public sealed class DesktopGuardControllerTests
             CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
+        }
+    }
+
+    private sealed class StagedIoRaceMoveExecutor : IShortcutMoveExecutor
+    {
+        private bool _raced;
+
+        public Task MoveAsync(string sourcePath, string destinationPath, Guid operationId,
+            ElevatedShortcutOperationRequest elevatedRequest, CancellationToken cancellationToken,
+            bool allowElevation = true, byte[]? expectedSourceContentHash = null)
+        {
+            if (!_raced)
+            {
+                _raced = true;
+                string staging = ShortcutFileTransfer.GetOperationDirectory(destinationPath, operationId);
+                Directory.CreateDirectory(staging);
+                File.WriteAllText(Path.Combine(staging, "transfer.tmp"), "source shortcut");
+                File.WriteAllText(destinationPath, "racing destination");
+                throw new IOException("Destination appeared during publication.");
+            }
+
+            ShortcutFileTransfer.Move(sourcePath, destinationPath, operationId);
+            return Task.CompletedTask;
+        }
+
+        public Task RetryAsync(string sourcePath, string destinationPath, Guid operationId,
+            ElevatedShortcutOperationRequest elevatedRequest, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class DestinationRaceMoveExecutor : IShortcutMoveExecutor
+    {
+        private bool _hasCreatedDestination;
+
+        public Task MoveAsync(
+            string sourcePath,
+            string destinationPath,
+            Guid operationId,
+            ElevatedShortcutOperationRequest elevatedRequest,
+            CancellationToken cancellationToken,
+            bool allowElevation = true,
+            byte[]? expectedSourceContentHash = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_hasCreatedDestination)
+            {
+                _hasCreatedDestination = true;
+                File.WriteAllText(destinationPath, "racing destination");
+                throw new ShortcutFileOperationException(ShortcutFileOperationFailure.DestinationConflict);
+            }
+
+            ShortcutFileTransfer.Move(
+                sourcePath,
+                destinationPath,
+                operationId,
+                preserveHidden: elevatedRequest.Kind == ElevatedShortcutOperationKind.ParkToRecovery,
+                expectedSourceContentHash: expectedSourceContentHash);
+            return Task.CompletedTask;
+        }
+
+        public Task RetryAsync(
+            string sourcePath,
+            string destinationPath,
+            Guid operationId,
+            ElevatedShortcutOperationRequest elevatedRequest,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ShortcutFileTransfer.Move(
+                sourcePath,
+                destinationPath,
+                operationId,
+                allowExistingDestination: true,
+                preserveHidden: elevatedRequest.Kind == ElevatedShortcutOperationKind.ParkToRecovery);
+            return Task.CompletedTask;
         }
     }
 

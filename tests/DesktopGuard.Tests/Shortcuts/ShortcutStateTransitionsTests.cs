@@ -180,10 +180,13 @@ public sealed class ShortcutStateTransitionsTests
             state,
             shortcut.Id,
             DesktopRootKind.Public,
-            publicRoot);
+            publicRoot,
+            "Program(2).lnk");
+        Assert.AreEqual("Program(2).lnk", moving.Shortcuts.Single().TargetName);
         Assert.IsTrue(DesktopStateValidator.IsValid(moving));
         DesktopGuardState movedPublic = ShortcutStateTransitions.CompleteMove(moving, shortcut.Id);
         Assert.AreEqual(DesktopRootKind.Public, movedPublic.Shortcuts.Single().RootKind);
+        Assert.AreEqual("Program(2).lnk", movedPublic.Shortcuts.Single().Name);
         Assert.AreEqual(ShortcutStatus.ApprovedVisible, movedPublic.Shortcuts.Single().Status);
         Assert.IsEmpty(movedPublic.Roots.Single(root => root.RootKind == DesktopRootKind.User).KnownPaths);
         Assert.Contains(movedPublic.Shortcuts.Single().OriginalPath,
@@ -198,6 +201,38 @@ public sealed class ShortcutStateTransitionsTests
         Assert.AreEqual(DesktopRootKind.User, movedUser.Shortcuts.Single().RootKind);
         Assert.AreEqual(ShortcutStatus.ApprovedVisible, movedUser.Shortcuts.Single().Status);
         Assert.IsTrue(DesktopStateValidator.IsValid(movedUser));
+    }
+
+    [TestMethod]
+    public void BeginMove_PreflightNameStillRejectsDestinationReservedByAnotherOperation()
+    {
+        TrackedShortcut source = CreateShortcut(DesktopRootKind.Public);
+        string userRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "DesktopGuard.Tests", "User"));
+        TrackedShortcut other = source with
+        {
+            Id = Guid.NewGuid(),
+            Name = "Other.lnk",
+            OriginalPath = Path.Combine(source.RootPath, "Other.lnk"),
+            Operation = ShortcutOperation.Moving,
+            OperationId = Guid.NewGuid(),
+            TargetRootKind = DesktopRootKind.User,
+            TargetRootPath = userRoot,
+            TargetName = source.Name,
+        };
+        DesktopGuardState state = new()
+        {
+            Roots =
+            [
+                new DesktopRootCheckpoint(DesktopRootKind.Public, source.RootPath, true,
+                    [source.OriginalPath, other.OriginalPath]),
+                new DesktopRootCheckpoint(DesktopRootKind.User, userRoot, true, []),
+            ],
+            Shortcuts = [source, other],
+        };
+
+        Assert.IsTrue(DesktopStateValidator.IsValid(state));
+        Assert.Throws<InvalidOperationException>(() => ShortcutStateTransitions.BeginMove(
+            state, source.Id, DesktopRootKind.User, userRoot, source.Name));
     }
 
     [TestMethod]

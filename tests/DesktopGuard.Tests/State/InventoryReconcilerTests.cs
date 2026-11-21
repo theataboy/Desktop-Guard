@@ -215,6 +215,45 @@ public sealed class InventoryReconcilerTests
     }
 
     [TestMethod]
+    public void Reconcile_UnresolvedRestoreTracksReplacementAndDefersSuffixedTarget()
+    {
+        string userRoot = CreateRootPath("unresolved-restore-suffixed-target");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DesktopGuardState baseline = _reconciler.Reconcile(
+            new DesktopGuardState(),
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Restore.lnk"))]),
+            now).State;
+        TrackedShortcut original = baseline.Shortcuts.Single();
+        DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(
+            ShortcutStateTransitions.BeginParking(baseline, original.Id, Guid.NewGuid()), original.Id);
+        DesktopGuardState afterPark = _reconciler.Reconcile(
+            parked,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Restore.lnk"))]),
+            now.AddMinutes(1)).State;
+        TrackedShortcut replacement = afterPark.Shortcuts.Single(shortcut => shortcut.Id != original.Id);
+        DesktopGuardState restoring = ShortcutStateTransitions.BeginRestore(
+            afterPark,
+            original.Id,
+            "Restore(2).lnk");
+
+        InventoryReconciliation result = _reconciler.Reconcile(
+            restoring,
+            new DesktopInventorySnapshot([Root(DesktopRootKind.User, userRoot, complete: true,
+                Entry(DesktopRootKind.User, userRoot, "Restore.lnk"),
+                Entry(DesktopRootKind.User, userRoot, "Restore(2).lnk"))]),
+            now.AddMinutes(2));
+
+        Assert.HasCount(2, result.State.Shortcuts);
+        Assert.AreEqual(ShortcutOperation.Restoring, result.State.Shortcuts.Single(item => item.Id == original.Id).Operation);
+        Assert.AreEqual(ShortcutStatus.Pending, result.State.Shortcuts.Single(item => item.Id == replacement.Id).Status);
+        Assert.Contains(Path.Combine(userRoot, "Restore.lnk"), result.State.Roots.Single().KnownPaths);
+        Assert.DoesNotContain(Path.Combine(userRoot, "Restore(2).lnk"), result.State.Roots.Single().KnownPaths);
+        Assert.IsTrue(DesktopStateValidator.IsValid(result.State));
+    }
+
+    [TestMethod]
     public void Reconcile_UnresolvedRenameClaimsItsTargetPathWithoutCreatingDuplicate()
     {
         string userRoot = CreateRootPath("unresolved-rename");

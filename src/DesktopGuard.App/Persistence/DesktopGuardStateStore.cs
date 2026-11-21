@@ -144,6 +144,11 @@ internal sealed class DesktopGuardStateStore : IDesktopGuardStateStore
                 return state with { SchemaVersion = DesktopGuardState.CurrentSchemaVersion };
             }
 
+            if (schemaVersion == 8 && DesktopStateValidator.IsValidVersionEight(state))
+            {
+                return state with { SchemaVersion = DesktopGuardState.CurrentSchemaVersion };
+            }
+
             if (schemaVersion != DesktopGuardState.CurrentSchemaVersion || !DesktopStateValidator.IsValid(state))
             {
                 throw new StateStoreException(StateStoreFailureKind.Corrupt);

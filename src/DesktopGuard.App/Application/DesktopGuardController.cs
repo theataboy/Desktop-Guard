@@ -606,7 +606,9 @@ internal sealed class DesktopGuardController
         try
         {
             EnsureManageableShortcut(shortcutId);
-            DesktopGuardState pending = ShortcutStateTransitions.BeginRestore(_state, shortcutId);
+            TrackedShortcut shortcutToRestore = FindShortcut(_state, shortcutId);
+            string targetName = _fileManager.GetRestoreTargetName(shortcutToRestore);
+            DesktopGuardState pending = ShortcutStateTransitions.BeginRestore(_state, shortcutId, targetName);
             _stateStore.Save(pending);
             _state = pending;
 
@@ -619,6 +621,12 @@ internal sealed class DesktopGuardController
                 _state = completed;
                 _unresolvedOperationIds.TryRemove(shortcutId, out _);
                 _lastFailure = null;
+            }
+            catch (ShortcutFileOperationException exception)
+                when (exception.Failure == ShortcutFileOperationFailure.DestinationConflict)
+            {
+                CancelDesktopOperationAfterDestinationConflict(shortcutId);
+                throw;
             }
             catch
             {
@@ -665,7 +673,7 @@ internal sealed class DesktopGuardController
             }
 
             TrackedShortcut shortcutToMove = FindShortcut(shortcutId);
-            _fileManager.EnsureMoveDestinationAvailable(
+            string targetName = _fileManager.GetMoveTargetName(
                 shortcutToMove,
                 destinationRootKind,
                 targetRoot.RootPath);
@@ -673,7 +681,8 @@ internal sealed class DesktopGuardController
                 _state,
                 shortcutId,
                 destinationRootKind,
-                targetRoot.RootPath);
+                targetRoot.RootPath,
+                targetName);
             _stateStore.Save(pending);
             _state = pending;
 
@@ -690,9 +699,7 @@ internal sealed class DesktopGuardController
             catch (ShortcutFileOperationException exception)
                 when (exception.Failure == ShortcutFileOperationFailure.DestinationConflict)
             {
-                DesktopGuardState canceled = ShortcutStateTransitions.CancelMove(_state, shortcutId);
-                _stateStore.Save(canceled);
-                _state = canceled;
+                CancelDesktopOperationAfterDestinationConflict(shortcutId);
                 throw;
             }
             catch
@@ -766,6 +773,17 @@ internal sealed class DesktopGuardController
             _state = completed;
             _unresolvedOperationIds.TryRemove(shortcutId, out _);
             _lastFailure = null;
+        }
+        catch (ShortcutFileOperationException exception)
+            when (exception.Failure == ShortcutFileOperationFailure.DestinationConflict)
+        {
+            _lastFailure = exception;
+            if (!CancelDesktopOperationAfterDestinationConflict(shortcutId))
+            {
+                _ = TryReconcileFailedOperation(shortcutId);
+            }
+
+            throw;
         }
         catch (Exception exception)
         {
@@ -1213,6 +1231,35 @@ internal sealed class DesktopGuardController
             _unresolvedOperationIds.TryAdd(shortcutId, 0);
             return PendingOperationResolution.Ambiguous;
         }
+    }
+
+    private bool CancelDesktopOperationAfterDestinationConflict(Guid shortcutId)
+    {
+        TrackedShortcut shortcut = FindShortcut(_state, shortcutId);
+        DesktopGuardState? canceled = shortcut.Operation switch
+        {
+            ShortcutOperation.Restoring => ShortcutStateTransitions.CancelRestore(_state, shortcutId),
+            ShortcutOperation.Moving => ShortcutStateTransitions.CancelMove(_state, shortcutId),
+            _ => null,
+        };
+        if (canceled is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            _stateStore.Save(canceled);
+        }
+        catch
+        {
+            _unresolvedOperationIds.TryAdd(shortcutId, 0);
+            throw;
+        }
+
+        _state = canceled;
+        _unresolvedOperationIds.TryRemove(shortcutId, out _);
+        return true;
     }
 
     private static DesktopGuardState? ApplyOperationResolution(

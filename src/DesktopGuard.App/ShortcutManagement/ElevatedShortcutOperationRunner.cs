@@ -142,7 +142,7 @@ internal static class ElevatedShortcutOperationRunner
                 && Enum.IsDefined(source)
                 && Enum.IsDefined(destination)
                 && source != destination
-                && request.TargetName is null,
+                && IsValidOperationTargetName(request.Name, request.TargetName),
             ElevatedShortcutOperationKind.ParkToRecovery =>
                 request.RecoveryFolderId is Guid recoveryId
                 && recoveryId != Guid.Empty
@@ -156,7 +156,7 @@ internal static class ElevatedShortcutOperationRunner
                 && request.SourceRootKind is null
                 && request.DestinationRootKind is DesktopRootKind restoreDestination
                 && Enum.IsDefined(restoreDestination)
-                && request.TargetName is null,
+                && IsValidOperationTargetName(request.Name, request.TargetName),
             ElevatedShortcutOperationKind.RenameShortcut =>
                 IsValidActionLocation(request)
                 && request.TargetName is string targetName
@@ -193,6 +193,18 @@ internal static class ElevatedShortcutOperationRunner
             && request.DestinationRootKind is null;
     }
 
+    private static bool IsValidOperationTargetName(string sourceName, string? targetName)
+    {
+        return targetName is null
+            || DesktopCandidatePolicy.IsValidWindowsFileName(targetName)
+                && string.Equals(Path.GetFileName(targetName), targetName, StringComparison.Ordinal)
+                && DesktopEntryClassifier.Classify(targetName) == DesktopEntryKind.Shortcut
+                && string.Equals(
+                    Path.GetExtension(sourceName),
+                    Path.GetExtension(targetName),
+                    StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static (string SourcePath, string DestinationPath) ResolvePaths(
         ElevatedShortcutOperationRequest request,
         InteractiveUserFolders userFolders)
@@ -201,7 +213,10 @@ internal static class ElevatedShortcutOperationRunner
         {
             ElevatedShortcutOperationKind.MoveBetweenDesktops =>
                 (BuildDesktopPath(request.SourceRootKind!.Value, request.Name, userFolders),
-                    BuildDesktopPath(request.DestinationRootKind!.Value, request.Name, userFolders)),
+                    BuildDesktopPath(
+                        request.DestinationRootKind!.Value,
+                        request.TargetName ?? request.Name,
+                        userFolders)),
             ElevatedShortcutOperationKind.ParkToRecovery => ResolveParkPaths(request, userFolders),
             ElevatedShortcutOperationKind.RestoreFromRecovery => ResolveRestorePaths(request, userFolders),
             ElevatedShortcutOperationKind.RenameShortcut => ResolveRenamePaths(request, userFolders),
@@ -339,7 +354,10 @@ internal static class ElevatedShortcutOperationRunner
                 recoveryRoot,
                 recoveryFolder,
                 recoveryPath),
-            BuildDesktopPath(request.DestinationRootKind!.Value, request.Name, userFolders));
+            BuildDesktopPath(
+                request.DestinationRootKind!.Value,
+                request.TargetName ?? request.Name,
+                userFolders));
     }
 
     private static (string DataDirectory, string RecoveryRoot, string RecoveryFolder, string RecoveryPath)

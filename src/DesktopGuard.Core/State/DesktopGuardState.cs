@@ -4,7 +4,7 @@ namespace DesktopGuard.Core.State;
 
 public sealed record DesktopGuardState
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 

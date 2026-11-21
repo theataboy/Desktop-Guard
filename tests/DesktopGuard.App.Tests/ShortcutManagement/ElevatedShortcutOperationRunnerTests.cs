@@ -54,7 +54,7 @@ public sealed class ElevatedShortcutOperationRunnerTests
         string userDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
         string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
         string localAppData = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "LocalAppData")).FullName;
-        ElevatedShortcutOperationRequest request = CreateRequest();
+        ElevatedShortcutOperationRequest request = CreateRequest() with { TargetName = "Program(2).lnk" };
         ElevatedShortcutOperationRunner.InteractiveUserFolders userFolders = new(
             userDesktop,
             publicDesktop,
@@ -63,7 +63,17 @@ public sealed class ElevatedShortcutOperationRunnerTests
         (string sourcePath, string destinationPath) = ElevatedShortcutOperationRunner.ResolvePaths(request, userFolders);
 
         Assert.AreEqual(Path.Combine(userDesktop, request.Name), sourcePath);
-        Assert.AreEqual(Path.Combine(publicDesktop, request.Name), destinationPath);
+        Assert.AreEqual(Path.Combine(publicDesktop, "Program(2).lnk"), destinationPath);
+    }
+
+    [TestMethod]
+    public void IsValidRequest_DesktopMoveTargetNameIsValidatedAsALeafWithMatchingExtension()
+    {
+        ElevatedShortcutOperationRequest request = CreateRequest() with { TargetName = "Program(2).lnk" };
+
+        Assert.IsTrue(ElevatedShortcutOperationRunner.IsValidRequest(request));
+        Assert.IsFalse(ElevatedShortcutOperationRunner.IsValidRequest(request with { TargetName = "Program.url" }));
+        Assert.IsFalse(ElevatedShortcutOperationRunner.IsValidRequest(request with { TargetName = "..\\Program(2).lnk" }));
     }
 
     [TestMethod]

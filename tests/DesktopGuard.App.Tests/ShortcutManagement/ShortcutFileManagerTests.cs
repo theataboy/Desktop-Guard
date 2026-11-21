@@ -25,7 +25,11 @@ public sealed class ShortcutFileManagerTests
         ShortcutFileManager manager = CreateManager(desktop, data);
         TrackedShortcut shortcut = CreateShortcut(desktop, "Program.lnk") with { IsHidden = true };
         DesktopGuardState parking = ShortcutStateTransitions.BeginParking(
-            new DesktopGuardState { Shortcuts = [shortcut] },
+            new DesktopGuardState
+            {
+                Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [shortcutPath])],
+                Shortcuts = [shortcut],
+            },
             shortcut.Id,
             Guid.NewGuid());
 
@@ -370,7 +374,7 @@ public sealed class ShortcutFileManagerTests
     }
 
     [TestMethod]
-    public async Task Restore_WhenOriginalPathIsOccupied_PreservesBothFiles()
+    public async Task Restore_WhenChosenTargetBecomesOccupied_PreservesAllFiles()
     {
         using TemporaryDirectory temporaryDirectory = new();
         string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
@@ -380,21 +384,56 @@ public sealed class ShortcutFileManagerTests
         ShortcutFileManager manager = CreateManager(desktop, data);
         TrackedShortcut shortcut = CreateShortcut(desktop, "Program.url");
         DesktopGuardState parking = ShortcutStateTransitions.BeginParking(
-            new DesktopGuardState { Shortcuts = [shortcut] },
+            new DesktopGuardState
+            {
+                Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [shortcutPath])],
+                Shortcuts = [shortcut],
+            },
             shortcut.Id,
             Guid.NewGuid());
         await manager.ParkAsync(parking.Shortcuts.Single(), CancellationToken.None);
         string recoveryPath = manager.GetRecoveryFilePath(parking.Shortcuts.Single());
         File.WriteAllText(shortcutPath, "replacement at original path");
         DesktopGuardState parked = ShortcutStateTransitions.CompleteParking(parking, shortcut.Id);
-        DesktopGuardState restoring = ShortcutStateTransitions.BeginRestore(parked, shortcut.Id);
+        string numberedPath = Path.Combine(desktop, "Program(2).url");
+        DesktopGuardState restoring = ShortcutStateTransitions.BeginRestore(
+            parked,
+            shortcut.Id,
+            "Program(2).url");
+        File.WriteAllText(numberedPath, "racing destination");
 
         ShortcutFileOperationException exception = await Assert.ThrowsAsync<ShortcutFileOperationException>(
             () => manager.RestoreAsync(restoring.Shortcuts.Single(), CancellationToken.None));
 
         Assert.AreEqual(ShortcutFileOperationFailure.DestinationConflict, exception.Failure);
         Assert.AreEqual("replacement at original path", File.ReadAllText(shortcutPath));
+        Assert.AreEqual("racing destination", File.ReadAllText(numberedPath));
         Assert.AreEqual("parked file", File.ReadAllText(recoveryPath));
+    }
+
+    [TestMethod]
+    public void GetRestoreTargetName_ChoosesLowestCaseInsensitiveFreeSuffix()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string userDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "UserDesktop")).FullName;
+        string publicDesktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "PublicDesktop")).FullName;
+        string data = Path.Combine(temporaryDirectory.Path, "AppData");
+        File.WriteAllText(Path.Combine(userDesktop, "MY_LINK.URL"), "existing");
+        Directory.CreateDirectory(Path.Combine(userDesktop, "my_link(2).url"));
+        string hiddenCollision = Path.Combine(userDesktop, "my_link(3).url");
+        File.WriteAllText(hiddenCollision, "existing");
+        File.SetAttributes(hiddenCollision, File.GetAttributes(hiddenCollision) | FileAttributes.Hidden);
+        ShortcutFileManager manager = CreateManager(userDesktop, publicDesktop, data);
+        TrackedShortcut parked = CreateShortcut(userDesktop, "my_link.url") with
+        {
+            Status = ShortcutStatus.Parked,
+            StatusBeforeParking = ShortcutStatus.Pending,
+            RecoveryFolderId = Guid.NewGuid(),
+        };
+
+        string targetName = manager.GetRestoreTargetName(parked);
+
+        Assert.AreEqual("my_link(4).url", targetName);
     }
 
     [TestMethod]

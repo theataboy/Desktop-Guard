@@ -54,6 +54,11 @@ public static class DesktopStateValidator
         return IsValidForVersion(state, 7, legacyVersionOne: false, allowCreating: true, allowExtendedOperations: true);
     }
 
+    public static bool IsValidVersionEight(DesktopGuardState state)
+    {
+        return IsValidForVersion(state, 8, legacyVersionOne: false, allowCreating: true, allowExtendedOperations: true);
+    }
+
     private static bool IsValidForVersion(
         DesktopGuardState state,
         int schemaVersion,
@@ -106,11 +111,17 @@ public static class DesktopStateValidator
             || state.Shortcuts
                 .Where(shortcut => shortcut.Status != ShortcutStatus.Parked
                     || shortcut.Operation == ShortcutOperation.Restoring)
-                .Select(shortcut => shortcut.OriginalPath)
+                .Select(shortcut => shortcut.Operation == ShortcutOperation.Restoring
+                    ? Path.Combine(shortcut.RootPath, shortcut.TargetName ?? shortcut.Name)
+                    : shortcut.OriginalPath)
                 .Distinct(GetPathComparer())
                 .Count() != state.Shortcuts.Count(shortcut =>
                     shortcut.Status != ShortcutStatus.Parked
                         || shortcut.Operation == ShortcutOperation.Restoring)
+            || state.Shortcuts
+                .Where(shortcut => shortcut.Operation == ShortcutOperation.Restoring)
+                .Any(shortcut => shortcut.TargetName is not null
+                    && HasRestoreTargetCollision(state, shortcut))
             || state.Shortcuts
                 .Where(shortcut => shortcut.RecoveryFolderId is not null)
                 .Select(shortcut => shortcut.RecoveryFolderId)
@@ -118,7 +129,7 @@ public static class DesktopStateValidator
                 .Count() != state.Shortcuts.Count(shortcut => shortcut.RecoveryFolderId is not null)
             || state.Shortcuts
                 .Where(shortcut => shortcut.Operation == ShortcutOperation.Moving)
-                .Select(shortcut => Path.Combine(shortcut.TargetRootPath!, shortcut.Name))
+                .Select(shortcut => Path.Combine(shortcut.TargetRootPath!, shortcut.TargetName ?? shortcut.Name))
                 .Distinct(GetPathComparer())
                 .Count() != state.Shortcuts.Count(shortcut => shortcut.Operation == ShortcutOperation.Moving)
             || state.Shortcuts.Any(shortcut => shortcut.Operation == ShortcutOperation.Moving
@@ -139,7 +150,9 @@ public static class DesktopStateValidator
                                 || other.Operation == ShortcutOperation.Restoring)
                             && PathsEqual(
                                 Path.Combine(shortcut.RootPath, shortcut.TargetName!),
-                                other.OriginalPath)))
+                                other.Operation == ShortcutOperation.Restoring
+                                    ? Path.Combine(other.RootPath, other.TargetName ?? other.Name)
+                                    : other.OriginalPath)))
             || !legacyVersionOne && state.Shortcuts
                 .Where(shortcut => shortcut.Operation != ShortcutOperation.None)
                 .Select(shortcut => shortcut.OperationId)
@@ -208,7 +221,9 @@ public static class DesktopStateValidator
                 && shortcut.TargetRootKind is null
                 && shortcut.TargetRootPath is null
                 && shortcut.OperationContentHash is null
-                && shortcut.TargetName is null
+                && (schemaVersion < 9
+                    ? shortcut.TargetName is null
+                    : shortcut.TargetName is null || IsValidOperationTargetName(shortcut.Name, shortcut.TargetName))
                 && (legacyVersionOne
                     ? shortcut.OperationId is null
                     : shortcut.OperationId is not null && shortcut.OperationId != Guid.Empty),
@@ -223,11 +238,13 @@ public static class DesktopStateValidator
                 && targetRootKind != shortcut.RootKind
                 && (!shortcut.IsDesktopGuardShortcut || targetRootKind == DesktopRootKind.User)
                 && shortcut.OperationContentHash is null
-                && shortcut.TargetName is null
+                && (schemaVersion < 9
+                    ? shortcut.TargetName is null
+                    : shortcut.TargetName is null || IsValidOperationTargetName(shortcut.Name, shortcut.TargetName))
                 && IsBoundedAbsolutePath(shortcut.TargetRootPath)
                 && DesktopCandidatePolicy.IsDirectChildOf(
                     shortcut.TargetRootPath!,
-                    Path.Combine(shortcut.TargetRootPath!, shortcut.Name)),
+                    Path.Combine(shortcut.TargetRootPath!, shortcut.TargetName ?? shortcut.Name)),
             ShortcutOperation.Creating => allowCreating
                 && shortcut.RootKind == DesktopRootKind.User
                 && string.Equals(shortcut.Name, ShortcutStateTransitions.DesktopShortcutName, StringComparison.Ordinal)
@@ -354,9 +371,52 @@ public static class DesktopStateValidator
             && string.Equals(Path.GetFileName(name), name, StringComparison.Ordinal);
     }
 
+    private static bool IsValidOperationTargetName(string sourceName, string targetName)
+    {
+        return IsValidFileName(targetName)
+            && DesktopEntryClassifier.Classify(targetName) == DesktopEntryKind.Shortcut
+            && string.Equals(
+                Path.GetExtension(sourceName),
+                Path.GetExtension(targetName),
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasRestoreTargetCollision(DesktopGuardState state, TrackedShortcut restoringShortcut)
+    {
+        string targetPath = Path.Combine(
+            restoringShortcut.RootPath,
+            restoringShortcut.TargetName ?? restoringShortcut.Name);
+        DesktopRootCheckpoint? targetRoot = state.Roots.FirstOrDefault(root =>
+            root.RootKind == restoringShortcut.RootKind
+                && PathsEqual(root.RootPath, restoringShortcut.RootPath));
+        return targetRoot is not null
+                && targetRoot.KnownPaths.Any(path => PathsEqual(path, targetPath))
+            || state.Shortcuts.Any(other => other.Id != restoringShortcut.Id
+                && (other.RootKind == restoringShortcut.RootKind
+                        && PathsEqual(other.RootPath, restoringShortcut.RootPath)
+                        && ((other.Status != ShortcutStatus.Parked
+                                && other.Operation != ShortcutOperation.Restoring
+                                && PathsEqual(other.OriginalPath, targetPath))
+                            || other.Operation == ShortcutOperation.Restoring
+                                && PathsEqual(
+                                    Path.Combine(other.RootPath, other.TargetName ?? other.Name),
+                                    targetPath)
+                            || other.Operation == ShortcutOperation.Renaming
+                                && other.Status != ShortcutStatus.Parked
+                                && PathsEqual(Path.Combine(other.RootPath, other.TargetName!), targetPath))
+                    || other.Operation == ShortcutOperation.Moving
+                        && other.TargetRootKind == restoringShortcut.RootKind
+                        && PathsEqual(other.TargetRootPath!, restoringShortcut.RootPath)
+                        && PathsEqual(
+                            Path.Combine(other.TargetRootPath!, other.TargetName ?? other.Name),
+                            targetPath)));
+    }
+
     private static bool HasMoveTargetCollision(DesktopGuardState state, TrackedShortcut movingShortcut)
     {
-        string targetPath = Path.Combine(movingShortcut.TargetRootPath!, movingShortcut.Name);
+        string targetPath = Path.Combine(
+            movingShortcut.TargetRootPath!,
+            movingShortcut.TargetName ?? movingShortcut.Name);
         DesktopRootCheckpoint? targetRoot = state.Roots.FirstOrDefault(root =>
             root.RootKind == movingShortcut.TargetRootKind
                 && PathsEqual(root.RootPath, movingShortcut.TargetRootPath!));
@@ -366,8 +426,12 @@ public static class DesktopStateValidator
                 && (other.RootKind == movingShortcut.TargetRootKind
                         && PathsEqual(other.RootPath, movingShortcut.TargetRootPath!)
                         && ((other.Status != ShortcutStatus.Parked
-                                || other.Operation == ShortcutOperation.Restoring)
-                            && PathsEqual(other.OriginalPath, targetPath)
+                                && other.Operation != ShortcutOperation.Restoring
+                                && PathsEqual(other.OriginalPath, targetPath))
+                            || other.Operation == ShortcutOperation.Restoring
+                                && PathsEqual(
+                                    Path.Combine(other.RootPath, other.TargetName ?? other.Name),
+                                    targetPath)
                             || other.Operation == ShortcutOperation.Renaming
                                 && other.Status != ShortcutStatus.Parked
                                 && PathsEqual(
@@ -376,7 +440,9 @@ public static class DesktopStateValidator
                     || other.Operation == ShortcutOperation.Moving
                         && other.TargetRootKind == movingShortcut.TargetRootKind
                         && PathsEqual(other.TargetRootPath!, movingShortcut.TargetRootPath!)
-                        && PathsEqual(Path.Combine(other.TargetRootPath!, other.Name), targetPath)));
+                        && PathsEqual(
+                            Path.Combine(other.TargetRootPath!, other.TargetName ?? other.Name),
+                            targetPath)));
     }
 
     private static bool IsBoundedAbsolutePath(string? path)

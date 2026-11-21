@@ -7,7 +7,7 @@ namespace DesktopGuard.App.DesktopScanning;
 
 internal sealed class DesktopInventoryScanner
 {
-    private const int MaximumEntriesPerRoot = 4096;
+    internal const int MaximumEntriesPerRoot = 4096;
 
     private static readonly EnumerationOptions TopLevelEnumerationOptions = new()
     {

@@ -407,6 +407,39 @@ public sealed class DesktopGuardStateStoreTests
     }
 
     [TestMethod]
+    public void Load_VersionEightPreservesInterruptedRestoreWithOriginalTargetNameFallback()
+    {
+        using TemporaryDirectory temporaryDirectory = new();
+        string desktop = Directory.CreateDirectory(Path.Combine(temporaryDirectory.Path, "Desktop")).FullName;
+        string originalPath = Path.Combine(desktop, "Program.url");
+        TrackedShortcut restoring = new(
+            Guid.NewGuid(),
+            DesktopRootKind.User,
+            desktop,
+            "Program.url",
+            originalPath,
+            ShortcutStatus.Parked,
+            ShortcutStatus.Pending,
+            ShortcutOperation.Restoring,
+            Guid.NewGuid(),
+            OperationId: Guid.NewGuid());
+        DesktopGuardState legacy = new()
+        {
+            SchemaVersion = 8,
+            Roots = [new DesktopRootCheckpoint(DesktopRootKind.User, desktop, true, [])],
+            Shortcuts = [restoring],
+        };
+        File.WriteAllText(Path.Combine(temporaryDirectory.Path, "state.json"), JsonSerializer.Serialize(legacy));
+
+        DesktopGuardState migrated = new DesktopGuardStateStore(temporaryDirectory.Path).Load();
+
+        Assert.AreEqual(DesktopGuardState.CurrentSchemaVersion, migrated.SchemaVersion);
+        Assert.AreEqual(ShortcutOperation.Restoring, migrated.Shortcuts.Single().Operation);
+        Assert.IsNull(migrated.Shortcuts.Single().TargetName);
+        Assert.IsTrue(DesktopStateValidator.IsValid(migrated));
+    }
+
+    [TestMethod]
     public void Load_WhenStateIsCorrupt_PreservesTheFileAndFailsClosed()
     {
         using TemporaryDirectory temporaryDirectory = new();

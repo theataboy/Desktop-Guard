@@ -334,9 +334,13 @@ public sealed class InventoryReconciler
         return shortcuts.FirstOrDefault(shortcut =>
             shortcut.RootKind == entry.RootKind
                 && PathsEqual(shortcut.RootPath, entry.RootPath)
-                && (PathsEqual(shortcut.OriginalPath, entry.Path)
-                        && (shortcut.Status != ShortcutStatus.Parked
-                            || shortcut.Operation == ShortcutOperation.Restoring)
+                && (shortcut.Status != ShortcutStatus.Parked
+                        && shortcut.Operation != ShortcutOperation.Restoring
+                        && PathsEqual(shortcut.OriginalPath, entry.Path)
+                    || shortcut.Operation == ShortcutOperation.Restoring
+                        && PathsEqual(
+                            Path.Combine(shortcut.RootPath, shortcut.TargetName ?? shortcut.Name),
+                            entry.Path)
                     || shortcut.Operation == ShortcutOperation.Renaming
                         && shortcut.Status != ShortcutStatus.Parked
                         && PathsEqual(
@@ -345,7 +349,9 @@ public sealed class InventoryReconciler
             || shortcut.Operation == ShortcutOperation.Moving
                 && shortcut.TargetRootKind == entry.RootKind
                 && PathsEqual(shortcut.TargetRootPath!, entry.RootPath)
-                && PathsEqual(Path.Combine(shortcut.TargetRootPath!, shortcut.Name), entry.Path));
+                && PathsEqual(
+                    Path.Combine(shortcut.TargetRootPath!, shortcut.TargetName ?? shortcut.Name),
+                    entry.Path));
     }
 
     private static bool IsUnresolvedOperationTarget(
@@ -354,10 +360,16 @@ public sealed class InventoryReconciler
     {
         return shortcuts.Any(shortcut => shortcut.Operation switch
         {
-            ShortcutOperation.Creating or ShortcutOperation.Restoring =>
+            ShortcutOperation.Creating =>
                 shortcut.RootKind == entry.RootKind
                     && PathsEqual(shortcut.RootPath, entry.RootPath)
                     && PathsEqual(shortcut.OriginalPath, entry.Path),
+            ShortcutOperation.Restoring =>
+                shortcut.RootKind == entry.RootKind
+                    && PathsEqual(shortcut.RootPath, entry.RootPath)
+                    && PathsEqual(
+                        Path.Combine(shortcut.RootPath, shortcut.TargetName ?? shortcut.Name),
+                        entry.Path),
             ShortcutOperation.Renaming when shortcut.Status != ShortcutStatus.Parked =>
                 shortcut.RootKind == entry.RootKind
                     && PathsEqual(shortcut.RootPath, entry.RootPath)
@@ -365,7 +377,9 @@ public sealed class InventoryReconciler
             ShortcutOperation.Moving =>
                 shortcut.TargetRootKind == entry.RootKind
                     && PathsEqual(shortcut.TargetRootPath!, entry.RootPath)
-                    && PathsEqual(Path.Combine(shortcut.TargetRootPath!, shortcut.Name), entry.Path),
+                    && PathsEqual(
+                        Path.Combine(shortcut.TargetRootPath!, shortcut.TargetName ?? shortcut.Name),
+                        entry.Path),
             _ => false,
         });
     }
